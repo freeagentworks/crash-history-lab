@@ -1,7 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import type { Candle, CrashEvent } from "../lib/analytics/types";
+import { buildEventDetailHref } from "../lib/navigation";
 import { flatPresetSymbols } from "../lib/presets";
 import {
   buildPathFromNullable,
@@ -86,6 +88,19 @@ export function SimilarLive() {
   const targetSparkline = useMemo(
     () => buildEventSparkline(candles, targetDate, preDays, postDays),
     [candles, targetDate, preDays, postDays],
+  );
+
+  const detailContext = useMemo(
+    () => ({
+      range,
+      mode,
+      threshold,
+      coolingDays,
+      preDays,
+      postDays,
+      params: uiSettings.indicators,
+    }),
+    [range, mode, threshold, coolingDays, preDays, postDays, uiSettings.indicators],
   );
 
   async function loadEvents() {
@@ -333,6 +348,16 @@ export function SimilarLive() {
             <div className="mt-3 rounded-xl bg-panel-strong p-3">
               <p className="font-display text-xl font-bold">{symbol}</p>
               <p className="font-mono text-sm text-muted">{targetEvent.date}</p>
+              <Link
+                href={buildEventDetailHref({
+                  symbol: targetEvent.symbol ?? symbol,
+                  date: targetEvent.date,
+                  context: detailContext,
+                })}
+                className="mt-2 inline-block rounded-lg border border-line px-2 py-1 text-xs hover:border-accent hover:text-accent"
+              >
+                詳細で開く
+              </Link>
               <div className="mt-3 flex flex-wrap gap-2 text-xs">
                 <span className="metric-pill">Score {formatNumber(targetEvent.crashScore, 1)}</span>
                 <span className="metric-pill">
@@ -370,9 +395,21 @@ export function SimilarLive() {
                       <p className="font-semibold">
                         #{index + 1} {symbol} <span className="font-mono text-xs text-muted">{match.date}</span>
                       </p>
-                      <span className="rounded-full bg-ok/15 px-2 py-1 text-xs font-semibold text-ok">
-                        類似度 {formatNumber(match.similarityScore, 1)}%
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="rounded-full bg-ok/15 px-2 py-1 text-xs font-semibold text-ok">
+                          類似度 {formatNumber(match.similarityScore, 1)}%
+                        </span>
+                        <Link
+                          href={buildEventDetailHref({
+                            symbol,
+                            date: match.date,
+                            context: detailContext,
+                          })}
+                          className="rounded-lg border border-line px-2 py-1 text-xs hover:border-accent hover:text-accent"
+                        >
+                          詳細
+                        </Link>
+                      </div>
                     </div>
                     <p className="mt-1 text-xs text-muted">
                       Feature距離 {formatNumber(match.featureDistance, 4)} / DTW距離 {formatNumber(match.dtwDistance, 4)}

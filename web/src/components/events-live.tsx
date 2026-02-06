@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useMemo, useState } from "react";
-import type { Candle, CrashEvent } from "../lib/analytics/types";
+import type { Candle, CrashEvent, IndicatorParams } from "../lib/analytics/types";
+import { buildEventDetailHref } from "../lib/navigation";
 import { flatPresetSymbols } from "../lib/presets";
 import { formatNumber, formatPct, percentIfRatio } from "../lib/ui-utils";
 import { readUiSettings } from "../lib/ui-settings";
@@ -25,14 +27,41 @@ const rangeOptions = [
   { label: "2年", value: "2y" },
 ];
 
-export function EventsLive() {
-  const initialSettings = useMemo(() => readUiSettings(), []);
+function safeQueryNumber(value: string | null, fallback: number): number {
+  if (value == null) return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
 
-  const [symbol, setSymbol] = useState("^N225");
-  const [range, setRange] = useState(initialSettings.defaultRange);
-  const [mode, setMode] = useState<DetectionMode>(initialSettings.defaultMode);
-  const [threshold, setThreshold] = useState(initialSettings.threshold);
-  const [coolingDays, setCoolingDays] = useState(initialSettings.coolingDays);
+function parseIndicatorParams(raw: string | null): Partial<IndicatorParams> | undefined {
+  if (!raw) return undefined;
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<IndicatorParams>;
+    if (parsed && typeof parsed === "object") return parsed;
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function EventsLive() {
+  const searchParams = useSearchParams();
+  const initialSettings = useMemo(() => readUiSettings(), []);
+  const initialSymbol = searchParams.get("symbol") ?? "^N225";
+  const initialRange = searchParams.get("range") ?? initialSettings.defaultRange;
+  const initialMode = searchParams.get("mode") === "single" ? "single" : initialSettings.defaultMode;
+  const initialThreshold = safeQueryNumber(searchParams.get("threshold"), initialSettings.threshold);
+  const initialCoolingDays = safeQueryNumber(searchParams.get("coolingDays"), initialSettings.coolingDays);
+  const preDays = safeQueryNumber(searchParams.get("preDays"), initialSettings.preDays);
+  const postDays = safeQueryNumber(searchParams.get("postDays"), initialSettings.postDays);
+  const indicatorParams = parseIndicatorParams(searchParams.get("params")) ?? initialSettings.indicators;
+
+  const [symbol, setSymbol] = useState(initialSymbol);
+  const [range, setRange] = useState(initialRange);
+  const [mode, setMode] = useState<DetectionMode>(initialMode);
+  const [threshold, setThreshold] = useState(initialThreshold);
+  const [coolingDays, setCoolingDays] = useState(initialCoolingDays);
   const [sortBy, setSortBy] = useState<SortBy>("score");
 
   const [isLoading, setIsLoading] = useState(false);
@@ -75,9 +104,43 @@ export function EventsLive() {
     query.set("mode", mode);
     query.set("threshold", String(threshold));
     query.set("coolingDays", String(coolingDays));
+    query.set("preDays", String(preDays));
+    query.set("postDays", String(postDays));
+    query.set("params", JSON.stringify(indicatorParams));
     query.set("targets", compareTargets.join(","));
     return `/compare?${query.toString()}`;
-  }, [symbol, range, mode, threshold, coolingDays, compareTargets]);
+  }, [
+    symbol,
+    range,
+    mode,
+    threshold,
+    coolingDays,
+    compareTargets,
+    preDays,
+    postDays,
+    indicatorParams,
+  ]);
+
+  const detailContext = useMemo(
+    () => ({
+      range,
+      mode,
+      threshold,
+      coolingDays,
+      preDays,
+      postDays,
+      params: indicatorParams,
+    }),
+    [
+      range,
+      mode,
+      threshold,
+      coolingDays,
+      preDays,
+      postDays,
+      indicatorParams,
+    ],
+  );
 
   function toggleDate(date: string) {
     setSelectedDates((prev) => {
@@ -115,7 +178,7 @@ export function EventsLive() {
           threshold,
           coolingDays,
           candles: market.candles,
-          params: initialSettings.indicators,
+          params: indicatorParams,
           singleRule:
             mode === "single"
               ? {
@@ -303,7 +366,11 @@ export function EventsLive() {
                       <td className="px-4 py-2.5">{formatNumber(event.metrics.volumeShock, 2)}x</td>
                       <td className="px-4 py-2.5">
                         <Link
-                          href={`/events/${encodeURIComponent(event.symbol ?? symbol)}/${event.date}`}
+                          href={buildEventDetailHref({
+                            symbol: event.symbol ?? symbol,
+                            date: event.date,
+                            context: detailContext,
+                          })}
                           className="rounded-lg border border-line px-2 py-1 text-xs hover:border-accent hover:text-accent"
                         >
                           開く

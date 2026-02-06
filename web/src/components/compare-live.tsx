@@ -1,8 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import type { Candle, CrashEvent, IndicatorPoint } from "../lib/analytics/types";
+import type { Candle, CrashEvent, IndicatorParams, IndicatorPoint } from "../lib/analytics/types";
+import { buildEventDetailHref } from "../lib/navigation";
 import {
   buildPathFromNullable,
   formatNumber,
@@ -40,18 +42,38 @@ function parseTargets(raw: string | null): string[] {
   );
 }
 
+function safeQueryNumber(value: string | null, fallback: number): number {
+  if (value == null) return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function parseIndicatorParams(raw: string | null): Partial<IndicatorParams> | undefined {
+  if (!raw) return undefined;
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<IndicatorParams>;
+    if (parsed && typeof parsed === "object") return parsed;
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function CompareLive() {
   const searchParams = useSearchParams();
   const uiSettings = useMemo(() => readUiSettings(), []);
 
   const initialSymbol = searchParams.get("symbol") ?? "^N225";
   const initialRange = searchParams.get("range") ?? uiSettings.defaultRange;
+  const rawMode = searchParams.get("mode");
   const initialMode =
-    (searchParams.get("mode") as DetectionMode | null) ?? uiSettings.defaultMode;
-  const initialThreshold = Number(searchParams.get("threshold") ?? String(uiSettings.threshold));
-  const initialCoolingDays = Number(
-    searchParams.get("coolingDays") ?? String(uiSettings.coolingDays),
-  );
+    rawMode === "single" || rawMode === "score" ? rawMode : uiSettings.defaultMode;
+  const initialThreshold = safeQueryNumber(searchParams.get("threshold"), uiSettings.threshold);
+  const initialCoolingDays = safeQueryNumber(searchParams.get("coolingDays"), uiSettings.coolingDays);
+  const initialPreDays = safeQueryNumber(searchParams.get("preDays"), uiSettings.preDays);
+  const initialPostDays = safeQueryNumber(searchParams.get("postDays"), uiSettings.postDays);
+  const indicatorParams = parseIndicatorParams(searchParams.get("params")) ?? uiSettings.indicators;
   const initialTargets = parseTargets(searchParams.get("targets")).slice(0, 4);
 
   const [symbol, setSymbol] = useState(initialSymbol);
@@ -59,8 +81,8 @@ export function CompareLive() {
   const [mode, setMode] = useState<DetectionMode>(initialMode);
   const [threshold, setThreshold] = useState(initialThreshold);
   const [coolingDays, setCoolingDays] = useState(initialCoolingDays);
-  const [preDays, setPreDays] = useState(uiSettings.preDays);
-  const [postDays, setPostDays] = useState(uiSettings.postDays);
+  const [preDays, setPreDays] = useState(initialPreDays);
+  const [postDays, setPostDays] = useState(initialPostDays);
 
   const [candles, setCandles] = useState<Candle[]>([]);
   const [indicatorPoints, setIndicatorPoints] = useState<IndicatorPoint[]>([]);
@@ -93,7 +115,7 @@ export function CompareLive() {
           body: JSON.stringify({
             symbol,
             candles: market.candles,
-            params: uiSettings.indicators,
+            params: indicatorParams,
           }),
         }),
         fetch("/api/crash-events", {
@@ -105,7 +127,7 @@ export function CompareLive() {
             threshold,
             coolingDays,
             candles: market.candles,
-            params: uiSettings.indicators,
+            params: indicatorParams,
             singleRule:
               mode === "single"
                 ? {
@@ -145,6 +167,19 @@ export function CompareLive() {
       setIsLoading(false);
     }
   }
+
+  const detailContext = useMemo(
+    () => ({
+      range,
+      mode,
+      threshold,
+      coolingDays,
+      preDays,
+      postDays,
+      params: indicatorParams,
+    }),
+    [range, mode, threshold, coolingDays, preDays, postDays, indicatorParams],
+  );
 
   useEffect(() => {
     void loadData();
@@ -343,9 +378,21 @@ export function CompareLive() {
                   <h2 className="font-display text-lg font-semibold">
                     {symbol} <span className="font-mono text-sm text-muted">{card.event.date}</span>
                   </h2>
-                  <span className="rounded-full bg-danger/10 px-2 py-1 text-xs font-semibold text-danger">
-                    Score {formatNumber(card.event.crashScore, 1)}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="rounded-full bg-danger/10 px-2 py-1 text-xs font-semibold text-danger">
+                      Score {formatNumber(card.event.crashScore, 1)}
+                    </span>
+                    <Link
+                      href={buildEventDetailHref({
+                        symbol: card.event.symbol ?? symbol,
+                        date: card.event.date,
+                        context: detailContext,
+                      })}
+                      className="rounded-lg border border-line px-2 py-1 text-xs hover:border-accent hover:text-accent"
+                    >
+                      詳細
+                    </Link>
+                  </div>
                 </div>
 
                 <div className="mt-4 rounded-xl border border-line bg-gradient-to-r from-panel to-[#f8f4ea] p-3">

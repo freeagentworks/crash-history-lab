@@ -5,7 +5,8 @@ import { useMemo, useState } from "react";
 import { defaultCrashScoreWeights } from "../lib/analytics/config";
 import type { Candle, CrashEvent, CrashFeatureKey, IndicatorPoint } from "../lib/analytics/types";
 import { flatPresetSymbols } from "../lib/presets";
-import { formatNumber, formatPct, percentIfRatio } from "../lib/ui-utils";
+import { buildEventDetailHref } from "../lib/navigation";
+import { buildPathFromNullable, formatNumber, formatPct, percentIfRatio } from "../lib/ui-utils";
 import { readUiSettings } from "../lib/ui-settings";
 
 type DetectionMode = "score" | "single";
@@ -47,38 +48,6 @@ const weightPills = Object.entries(defaultCrashScoreWeights).map(([key, value]) 
   key: key as CrashFeatureKey,
   weight: value,
 }));
-
-function buildPathFromNullable(
-  values: Array<number | null>,
-  width: number,
-  height: number,
-  bounds?: { min: number; max: number },
-): string {
-  const valid = values
-    .map((value, index) => (value == null || !Number.isFinite(value) ? null : { index, value }))
-    .filter((point): point is { index: number; value: number } => point != null);
-
-  if (valid.length === 0) return "";
-
-  const padding = 10;
-  const min = bounds?.min ?? Math.min(...valid.map((point) => point.value));
-  const max = bounds?.max ?? Math.max(...valid.map((point) => point.value));
-  const span = max - min || 1;
-
-  return valid
-    .map((point, idx) => {
-      const x =
-        padding +
-        (point.index / Math.max(values.length - 1, 1)) * (width - padding * 2);
-      const y =
-        height -
-        padding -
-        ((point.value - min) / span) * (height - padding * 2);
-
-      return `${idx === 0 ? "M" : "L"}${x.toFixed(1)} ${y.toFixed(1)}`;
-    })
-    .join(" ");
-}
 
 function computeAverageDrawdown(events: CrashEvent[]): number | null {
   const values = events
@@ -197,6 +166,19 @@ export function LiveDashboard() {
   const avgRecovery = useMemo(
     () => computeAverageRecovery(candles, events.slice(0, 30)),
     [candles, events],
+  );
+
+  const detailContext = useMemo(
+    () => ({
+      range,
+      mode,
+      threshold,
+      coolingDays,
+      preDays,
+      postDays,
+      params: initialSettings.indicators,
+    }),
+    [range, mode, threshold, coolingDays, preDays, postDays, initialSettings.indicators],
   );
 
   async function runDetection() {
@@ -489,7 +471,11 @@ export function LiveDashboard() {
                         <td className="px-4 py-2.5">{vol == null ? "-" : `${vol.toFixed(2)}x`}</td>
                         <td className="px-4 py-2.5">
                           <Link
-                            href={`/events/${encodeURIComponent(event.symbol ?? symbol)}/${event.date}`}
+                            href={buildEventDetailHref({
+                              symbol: event.symbol ?? symbol,
+                              date: event.date,
+                              context: detailContext,
+                            })}
                             className="rounded-lg border border-line px-2 py-1 text-xs hover:border-accent hover:text-accent"
                             onClick={(e) => e.stopPropagation()}
                           >

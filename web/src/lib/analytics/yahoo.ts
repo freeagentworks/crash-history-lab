@@ -19,6 +19,8 @@ type YahooChartResult = {
   };
 };
 
+const retryableStatuses = new Set([429, 500, 502, 503, 504]);
+
 function toUnix(date: string): number | null {
   const parsed = Date.parse(date);
   if (Number.isNaN(parsed)) return null;
@@ -27,6 +29,41 @@ function toUnix(date: string): number | null {
 
 function toDateString(unixSec: number): string {
   return new Date(unixSec * 1000).toISOString().slice(0, 10);
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function fetchWithBackoff(
+  url: string,
+  init: RequestInit & { next?: { revalidate: number } },
+  maxAttempts = 3,
+): Promise<Response> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const response = await fetch(url, init);
+      if (response.ok) return response;
+      if (!retryableStatuses.has(response.status) || attempt === maxAttempts) {
+        return response;
+      }
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error("Unknown fetch error");
+      if (attempt === maxAttempts) {
+        throw lastError;
+      }
+    }
+
+    const backoffMs = 200 * 2 ** (attempt - 1) + Math.floor(Math.random() * 120);
+    await wait(backoffMs);
+  }
+
+  if (lastError) throw lastError;
+  throw new Error("Yahoo fetch failed after retries");
 }
 
 export async function fetchYahooCandles(input: {
@@ -57,7 +94,7 @@ export async function fetchYahooCandles(input: {
 
   const url = `${baseUrl}?${params.toString()}`;
 
-  const response = await fetch(url, {
+  const response = await fetchWithBackoff(url, {
     headers: {
       "User-Agent": "Mozilla/5.0",
     },

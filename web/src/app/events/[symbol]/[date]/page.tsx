@@ -2,20 +2,36 @@ import Link from "next/link";
 import { AppShell } from "../../../../components/app-shell";
 import { detectCrashEvents } from "../../../../lib/analytics/crash-detection";
 import { computeIndicators } from "../../../../lib/analytics/indicators";
+import type { CrashFeatureKey, CrashEvent, IndicatorPoint } from "../../../../lib/analytics/types";
 import { fetchYahooCandles } from "../../../../lib/analytics/yahoo";
-import { buildLinePath, formatNumber, formatPct, percentIfRatio } from "../../../../lib/ui-utils";
-import type { CrashFeatureKey, CrashEvent } from "../../../../lib/analytics/types";
+import { buildEventsListHref, type EventDetailContext, parseEventDetailContext } from "../../../../lib/navigation";
+import {
+  buildLinePath,
+  buildPathFromNullable,
+  formatNumber,
+  formatPct,
+  percentIfRatio,
+} from "../../../../lib/ui-utils";
 
 type EventDetailPageProps = {
   params: Promise<{ symbol: string; date: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
 
 type EventDetailData = {
   event: CrashEvent;
   closePath: string;
+  smaPath: string;
+  rsiPath: string;
+  atrPath: string;
   markerX: number;
   preDays: number;
   postDays: number;
+  range: string;
+  mode: "score" | "single";
+  threshold: number;
+  coolingDays: number;
+  indicatorSnapshot: Array<{ label: string; value: string }>;
   topSignals: Array<[CrashFeatureKey, number]>;
 };
 
@@ -33,13 +49,36 @@ const featureLabels: Record<CrashFeatureKey, string> = {
   breadth: "ブレッドス",
 };
 
-async function loadEventDetail(symbol: string, date: string): Promise<EventDetailData | null> {
-  const market = await fetchYahooCandles({ symbol, range: "10y" });
-  const indicators = computeIndicators({ candles: market.candles, symbol });
+function buildIndicatorSnapshot(point: IndicatorPoint | undefined): Array<{ label: string; value: string }> {
+  if (!point) return [];
+
+  return [
+    { label: "Z値", value: formatNumber(point.zScore, 2) },
+    { label: "RSI", value: formatNumber(point.rsi, 2) },
+    { label: "CRSI", value: formatNumber(point.crsi, 2) },
+    { label: "DD率", value: formatPct(percentIfRatio(point.drawdownRate), 1) },
+    { label: "DD速度", value: formatPct(percentIfRatio(point.drawdownSpeed), 1) },
+    { label: "ATR%", value: formatPct(point.atrPct, 2) },
+    { label: "出来高Shock", value: `${formatNumber(point.volumeShock, 2)}x` },
+    { label: "200日線割れ", value: point.below200 == null ? "-" : point.below200 ? "Yes" : "No" },
+    { label: "200日線傾き", value: formatNumber(point.slope200, 4) },
+    { label: "ギャップ頻度", value: formatNumber(point.gapDownFreq, 1) },
+    { label: "52週安値", value: point.is52wLow == null ? "-" : point.is52wLow ? "Yes" : "No" },
+    { label: "ブレッドス", value: formatNumber(point.breadth, 1) },
+  ];
+}
+
+async function loadEventDetail(
+  symbol: string,
+  date: string,
+  context: EventDetailContext,
+): Promise<EventDetailData | null> {
+  const market = await fetchYahooCandles({ symbol, range: context.range });
+  const indicators = computeIndicators({ candles: market.candles, symbol, params: context.params });
   const detection = detectCrashEvents(indicators.points, {
-    mode: "score",
-    threshold: 70,
-    coolingDays: 10,
+    mode: context.mode,
+    threshold: context.threshold,
+    coolingDays: context.coolingDays,
     symbol,
   });
 
@@ -49,8 +88,8 @@ async function loadEventDetail(symbol: string, date: string): Promise<EventDetai
 
   if (!targetEvent) return null;
 
-  const preDays = 10;
-  const postDays = 50;
+  const preDays = Math.max(1, Math.round(context.preDays));
+  const postDays = Math.max(1, Math.round(context.postDays));
   const idx = market.candles.findIndex((candle) => candle.date === targetEvent.date);
 
   if (idx < 0) return null;
@@ -61,10 +100,28 @@ async function loadEventDetail(symbol: string, date: string): Promise<EventDetai
 
   if (window.length === 0) return null;
 
+  const pointMap = new Map(indicators.points.map((point) => [point.date, point]));
+
   const closePath = buildLinePath(
     window.map((candle) => candle.close),
     620,
     240,
+  );
+  const smaPath = buildPathFromNullable(
+    window.map((candle) => pointMap.get(candle.date)?.sma200 ?? null),
+    620,
+    240,
+  );
+  const rsiPath = buildPathFromNullable(
+    window.map((candle) => pointMap.get(candle.date)?.rsi ?? null),
+    620,
+    100,
+    { min: 0, max: 100 },
+  );
+  const atrPath = buildPathFromNullable(
+    window.map((candle) => pointMap.get(candle.date)?.atrPct ?? null),
+    620,
+    100,
   );
 
   const markerX = 14 + ((idx - start) / Math.max(window.length - 1, 1)) * (620 - 28);
@@ -76,23 +133,33 @@ async function loadEventDetail(symbol: string, date: string): Promise<EventDetai
   return {
     event: targetEvent,
     closePath,
+    smaPath,
+    rsiPath,
+    atrPath,
     markerX,
     preDays,
     postDays,
+    range: context.range,
+    mode: context.mode,
+    threshold: context.threshold,
+    coolingDays: context.coolingDays,
+    indicatorSnapshot: buildIndicatorSnapshot(pointMap.get(targetEvent.date)),
     topSignals,
   };
 }
 
-export default async function EventDetailPage({ params }: EventDetailPageProps) {
-  const resolved = await params;
+export default async function EventDetailPage({ params, searchParams }: EventDetailPageProps) {
+  const [resolved, resolvedSearchParams] = await Promise.all([params, searchParams]);
   const symbol = decodeURIComponent(resolved.symbol);
   const date = resolved.date;
+  const context = parseEventDetailContext(resolvedSearchParams);
+  const backHref = buildEventsListHref({ symbol, context });
 
   let detail: EventDetailData | null = null;
   let loadError: string | null = null;
 
   try {
-    detail = await loadEventDetail(symbol, date);
+    detail = await loadEventDetail(symbol, date, context);
   } catch (error) {
     loadError = error instanceof Error ? error.message : "Unknown error";
   }
@@ -106,7 +173,7 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
         <section className="glass-card p-4 md:p-5 text-sm text-danger">
           データ取得または計算に失敗しました: {loadError}
         </section>
-        <Link href="/events" className="glass-card inline-block px-4 py-2 text-sm hover:border-accent">
+        <Link href={backHref} className="glass-card inline-block px-4 py-2 text-sm hover:border-accent">
           一覧へ戻る
         </Link>
       </AppShell>
@@ -120,9 +187,10 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
         subtitle={`${date} を中心に前後チャートと指標寄与を確認します。`}
       >
         <section className="glass-card p-4 md:p-5 text-sm text-muted">
-          指定イベントが見つかりませんでした。ランキング条件（threshold=70, cooling=10）で再抽出した結果に存在しない可能性があります。
+          指定イベントが見つかりませんでした。ランキング条件（mode={context.mode}, threshold=
+          {formatNumber(context.threshold, 0)}, cooling={formatNumber(context.coolingDays, 0)}）で再抽出した結果に存在しない可能性があります。
         </section>
-        <Link href="/events" className="glass-card inline-block px-4 py-2 text-sm hover:border-accent">
+        <Link href={backHref} className="glass-card inline-block px-4 py-2 text-sm hover:border-accent">
           一覧へ戻る
         </Link>
       </AppShell>
@@ -143,7 +211,7 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
             </p>
             <p className="mt-1 text-sm text-muted">Score {formatNumber(detail.event.crashScore, 1)}</p>
           </div>
-          <Link href="/events" className="rounded-xl border border-line px-3 py-2 text-sm hover:border-accent">
+          <Link href={backHref} className="rounded-xl border border-line px-3 py-2 text-sm hover:border-accent">
             一覧へ戻る
           </Link>
         </div>
@@ -153,8 +221,10 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
         <div className="glass-card p-4 md:p-5">
           <h2 className="font-display text-lg font-semibold">イベント前後チャート</h2>
           <div className="mt-4 rounded-xl border border-line bg-gradient-to-br from-panel via-[#fbf6ea] to-panel p-3">
-            <svg viewBox="0 0 620 240" className="h-64 w-full">
+            <p className="mb-1 text-xs text-muted">Close(青) / SMA200(橙)</p>
+            <svg viewBox="0 0 620 240" className="h-52 w-full">
               <path d={detail.closePath} fill="none" stroke="#005f73" strokeWidth="3.5" />
+              <path d={detail.smaPath} fill="none" stroke="#ee9b00" strokeWidth="2.5" />
               <line
                 x1={detail.markerX}
                 x2={detail.markerX}
@@ -165,10 +235,26 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
                 strokeDasharray="6 4"
               />
             </svg>
+
+            <p className="mb-1 mt-3 text-xs text-muted">RSI</p>
+            <svg viewBox="0 0 620 100" className="h-20 w-full">
+              <line x1="10" y1="30" x2="610" y2="30" stroke="#999" strokeDasharray="4 3" strokeWidth="1" />
+              <line x1="10" y1="70" x2="610" y2="70" stroke="#999" strokeDasharray="4 3" strokeWidth="1" />
+              <path d={detail.rsiPath} fill="none" stroke="#9b2226" strokeWidth="2.3" />
+            </svg>
+
+            <p className="mb-1 mt-3 text-xs text-muted">ATR%</p>
+            <svg viewBox="0 0 620 100" className="h-20 w-full">
+              <path d={detail.atrPath} fill="none" stroke="#2a9d8f" strokeWidth="2.3" />
+            </svg>
           </div>
           <div className="mt-3 flex flex-wrap gap-2 text-xs">
             <span className="metric-pill">前{detail.preDays}日</span>
             <span className="metric-pill">後{detail.postDays}日</span>
+            <span className="metric-pill">期間 {detail.range}</span>
+            <span className="metric-pill">Mode {detail.mode}</span>
+            <span className="metric-pill">閾値 {formatNumber(detail.threshold, 0)}</span>
+            <span className="metric-pill">Cooling {formatNumber(detail.coolingDays, 0)}</span>
             <span className="metric-pill">
               DD {formatPct(percentIfRatio(detail.event.metrics.drawdownRate), 1)}
             </span>
@@ -178,6 +264,15 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
             <span className="metric-pill">
               Vol {formatNumber(detail.event.metrics.volumeShock, 2)}x
             </span>
+          </div>
+
+          <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+            {detail.indicatorSnapshot.map((item) => (
+              <div key={item.label} className="rounded-lg bg-panel-strong px-2 py-1.5">
+                <p className="text-muted">{item.label}</p>
+                <p className="font-semibold text-foreground">{item.value}</p>
+              </div>
+            ))}
           </div>
         </div>
 
