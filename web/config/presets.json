@@ -1,0 +1,34 @@
+{
+  "groups": [
+    {
+      "id": "major_indices",
+      "label": "主要指数",
+      "symbols": [
+        { "label": "日経平均", "symbol": "^N225" },
+        { "label": "S&P 500", "symbol": "^GSPC" }
+      ]
+    },
+    {
+      "id": "mag7",
+      "label": "Magnificent 7",
+      "symbols": [
+        { "label": "Apple", "symbol": "AAPL" },
+        { "label": "Microsoft", "symbol": "MSFT" },
+        { "label": "NVIDIA", "symbol": "NVDA" },
+        { "label": "Amazon", "symbol": "AMZN" },
+        { "label": "Meta", "symbol": "META" },
+        { "label": "Alphabet", "symbol": "GOOGL" },
+        { "label": "Tesla", "symbol": "TSLA" }
+      ]
+    },
+    {
+      "id": "fx_crypto",
+      "label": "FX & Crypto",
+      "symbols": [
+        { "label": "BTC/USD", "symbol": "BTC-USD" },
+        { "label": "USD/JPY", "symbol": "JPY=X" },
+        { "label": "EUR/USD", "symbol": "EURUSD=X" }
+      ]
+    }
+  ]
+}

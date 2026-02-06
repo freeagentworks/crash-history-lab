@@ -1,0 +1,36 @@
+# macOS / editor
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# docs artifacts
+docs/.DS_Store
+
+# Next.js app under /web
+web/node_modules/
+web/.next/
+web/out/
+web/build/
+web/coverage/
+web/playwright-report/
+web/test-results/
+
+# env / local deployment metadata
+web/.env*
+!web/.env.example
+web/.vercel/
+web/.netlify/
+
+# logs / ts cache
+web/*.log
+web/npm-debug.log*
+web/yarn-debug.log*
+web/yarn-error.log*
+web/.pnpm-debug.log*
+web/*.tsbuildinfo
+web/next-env.d.ts
+
+# temporary backup dir if nested git is detached
+web/.git-nested-backup/

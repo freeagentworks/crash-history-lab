@@ -1,0 +1,349 @@
+"use client";
+
+import { useMemo, useState } from "react";
+import type { Candle, CrashEvent } from "../lib/analytics/types";
+import { flatPresetSymbols } from "../lib/presets";
+import { formatNumber, formatPct, percentIfRatio } from "../lib/ui-utils";
+
+type DetectionMode = "score" | "single";
+
+type MarketDataResponse = {
+  candles: Candle[];
+};
+
+type CrashEventsResponse = {
+  ranking: CrashEvent[];
+};
+
+type SimilarMatch = {
+  date: string;
+  similarityScore: number;
+  featureDistance: number;
+  dtwDistance: number;
+  reasons: Array<{ feature: string; note: string }>;
+  metrics: Partial<Record<string, number>>;
+};
+
+type SimilarResponse = {
+  matches: SimilarMatch[];
+};
+
+export function SimilarLive() {
+  const [symbol, setSymbol] = useState("^N225");
+  const [range, setRange] = useState("10y");
+  const [mode, setMode] = useState<DetectionMode>("score");
+  const [threshold, setThreshold] = useState(70);
+  const [coolingDays, setCoolingDays] = useState(10);
+  const [topN, setTopN] = useState(5);
+  const [preDays, setPreDays] = useState(10);
+  const [postDays, setPostDays] = useState(50);
+
+  const [candles, setCandles] = useState<Candle[]>([]);
+  const [events, setEvents] = useState<CrashEvent[]>([]);
+  const [targetDate, setTargetDate] = useState("");
+  const [matches, setMatches] = useState<SimilarMatch[]>([]);
+
+  const [isLoadingEvents, setIsLoadingEvents] = useState(false);
+  const [isLoadingSimilar, setIsLoadingSimilar] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const targetEvent = useMemo(
+    () => events.find((event) => event.date === targetDate) ?? null,
+    [events, targetDate],
+  );
+
+  async function loadEvents() {
+    if (!symbol.trim()) {
+      setError("銘柄コードを入力してください。");
+      return;
+    }
+
+    setError(null);
+    setIsLoadingEvents(true);
+
+    try {
+      const marketResponse = await fetch(
+        `/api/market-data?symbol=${encodeURIComponent(symbol.trim())}&range=${encodeURIComponent(range)}`,
+      );
+      if (!marketResponse.ok) throw new Error("市場データの取得に失敗しました。");
+      const market = (await marketResponse.json()) as MarketDataResponse;
+
+      const crashResponse = await fetch("/api/crash-events", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          symbol: symbol.trim(),
+          mode,
+          threshold,
+          coolingDays,
+          candles: market.candles,
+          singleRule:
+            mode === "single"
+              ? {
+                  feature: "drawdownRate",
+                  operator: "<=",
+                  value: -0.15,
+                }
+              : undefined,
+        }),
+      });
+
+      if (!crashResponse.ok) throw new Error("イベント抽出に失敗しました。");
+      const crash = (await crashResponse.json()) as CrashEventsResponse;
+
+      const ranking = crash.ranking ?? [];
+      setCandles(market.candles ?? []);
+      setEvents(ranking);
+      setTargetDate(ranking[0]?.date ?? "");
+      setMatches([]);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "不明なエラー";
+      setError(message);
+      setCandles([]);
+      setEvents([]);
+      setTargetDate("");
+      setMatches([]);
+    } finally {
+      setIsLoadingEvents(false);
+    }
+  }
+
+  async function runSimilarSearch() {
+    if (!targetDate) {
+      setError("ターゲットイベント日を選択してください。");
+      return;
+    }
+
+    setError(null);
+    setIsLoadingSimilar(true);
+
+    try {
+      const response = await fetch("/api/similar-events", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          symbol,
+          targetDate,
+          topN,
+          preDays,
+          postDays,
+          mode,
+          threshold,
+          coolingDays,
+          candles,
+          events,
+        }),
+      });
+
+      if (!response.ok) throw new Error("類似局面検索に失敗しました。");
+      const payload = (await response.json()) as SimilarResponse;
+      setMatches(payload.matches ?? []);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "不明なエラー";
+      setError(message);
+      setMatches([]);
+    } finally {
+      setIsLoadingSimilar(false);
+    }
+  }
+
+  return (
+    <>
+      <section className="glass-card p-4 md:p-5">
+        <div className="grid gap-3 md:grid-cols-5">
+          <label className="space-y-1 text-sm md:col-span-2">
+            <span className="text-muted">銘柄</span>
+            <input
+              className="w-full rounded-xl border border-line bg-panel px-3 py-2 font-mono"
+              value={symbol}
+              onChange={(e) => setSymbol(e.target.value)}
+            />
+          </label>
+          <label className="space-y-1 text-sm">
+            <span className="text-muted">プリセット</span>
+            <select
+              className="w-full rounded-xl border border-line bg-panel px-3 py-2"
+              defaultValue=""
+              onChange={(e) => setSymbol(e.target.value)}
+            >
+              <option value="" disabled>
+                選択
+              </option>
+              {flatPresetSymbols.map((preset) => (
+                <option key={preset.symbol} value={preset.symbol}>
+                  {preset.label} ({preset.symbol})
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="space-y-1 text-sm">
+            <span className="text-muted">取得期間</span>
+            <input
+              className="w-full rounded-xl border border-line bg-panel px-3 py-2"
+              value={range}
+              onChange={(e) => setRange(e.target.value)}
+            />
+          </label>
+          <button
+            onClick={loadEvents}
+            className="rounded-xl bg-accent px-3 py-2 text-sm font-semibold text-white"
+            disabled={isLoadingEvents}
+          >
+            {isLoadingEvents ? "読込中..." : "イベント読込"}
+          </button>
+        </div>
+
+        <div className="mt-3 grid gap-3 text-sm md:grid-cols-4">
+          <label className="space-y-1">
+            <span className="text-muted">判定モード</span>
+            <select
+              className="w-full rounded-xl border border-line bg-panel px-3 py-2"
+              value={mode}
+              onChange={(e) => setMode(e.target.value as DetectionMode)}
+            >
+              <option value="score">スコア方式</option>
+              <option value="single">単一条件</option>
+            </select>
+          </label>
+          <label className="space-y-1">
+            <span className="text-muted">閾値</span>
+            <input
+              type="number"
+              className="w-full rounded-xl border border-line bg-panel px-3 py-2"
+              value={threshold}
+              onChange={(e) => setThreshold(Number(e.target.value))}
+            />
+          </label>
+          <label className="space-y-1">
+            <span className="text-muted">クーリング日数</span>
+            <input
+              type="number"
+              className="w-full rounded-xl border border-line bg-panel px-3 py-2"
+              value={coolingDays}
+              onChange={(e) => setCoolingDays(Number(e.target.value))}
+            />
+          </label>
+          <label className="space-y-1">
+            <span className="text-muted">Top N</span>
+            <input
+              type="number"
+              min={1}
+              max={20}
+              className="w-full rounded-xl border border-line bg-panel px-3 py-2"
+              value={topN}
+              onChange={(e) => setTopN(Number(e.target.value))}
+            />
+          </label>
+        </div>
+
+        <div className="mt-3 grid gap-3 text-sm md:grid-cols-3">
+          <label className="space-y-1 md:col-span-2">
+            <span className="text-muted">ターゲットイベント日</span>
+            <select
+              className="w-full rounded-xl border border-line bg-panel px-3 py-2 font-mono"
+              value={targetDate}
+              onChange={(e) => setTargetDate(e.target.value)}
+            >
+              {events.length === 0 ? <option value="">イベント未読込</option> : null}
+              {events.map((event) => (
+                <option key={event.date} value={event.date}>
+                  {event.date} (Score {formatNumber(event.crashScore, 1)})
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="space-y-1">
+              <span className="text-muted">前</span>
+              <input
+                type="number"
+                className="w-full rounded-xl border border-line bg-panel px-3 py-2"
+                value={preDays}
+                onChange={(e) => setPreDays(Number(e.target.value))}
+              />
+            </label>
+            <label className="space-y-1">
+              <span className="text-muted">後</span>
+              <input
+                type="number"
+                className="w-full rounded-xl border border-line bg-panel px-3 py-2"
+                value={postDays}
+                onChange={(e) => setPostDays(Number(e.target.value))}
+              />
+            </label>
+          </div>
+        </div>
+
+        <button
+          onClick={runSimilarSearch}
+          className="mt-3 rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white"
+          disabled={isLoadingSimilar || events.length === 0}
+        >
+          {isLoadingSimilar ? "検索中..." : "類似局面を検索"}
+        </button>
+
+        {error ? (
+          <div className="mt-3 rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger">
+            {error}
+          </div>
+        ) : null}
+      </section>
+
+      <section className="grid gap-4 lg:grid-cols-[1fr_1.3fr]">
+        <article className="glass-card p-4 md:p-5">
+          <h2 className="font-display text-lg font-semibold">ターゲットイベント</h2>
+          {targetEvent ? (
+            <div className="mt-3 rounded-xl bg-panel-strong p-3">
+              <p className="font-display text-xl font-bold">{symbol}</p>
+              <p className="font-mono text-sm text-muted">{targetEvent.date}</p>
+              <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                <span className="metric-pill">Score {formatNumber(targetEvent.crashScore, 1)}</span>
+                <span className="metric-pill">
+                  DD {formatPct(percentIfRatio(targetEvent.metrics.drawdownRate), 1)}
+                </span>
+                <span className="metric-pill">
+                  10d {formatPct(percentIfRatio(targetEvent.metrics.drawdownSpeed), 1)}
+                </span>
+              </div>
+              <p className="mt-3 text-sm text-muted">
+                検索範囲: 同一銘柄内（初期値） / データ本数 {candles.length.toLocaleString()}
+              </p>
+            </div>
+          ) : (
+            <p className="mt-3 text-sm text-muted">イベントを読み込むと表示されます。</p>
+          )}
+        </article>
+
+        <article className="glass-card p-4 md:p-5">
+          <h2 className="font-display text-lg font-semibold">Top 類似イベント</h2>
+          <div className="mt-3 space-y-2">
+            {matches.length === 0 ? (
+              <p className="text-sm text-muted">検索結果はまだありません。</p>
+            ) : (
+              matches.map((match, index) => (
+                <div key={match.date} className="rounded-xl border border-line bg-panel px-3 py-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="font-semibold">
+                      #{index + 1} {symbol} <span className="font-mono text-xs text-muted">{match.date}</span>
+                    </p>
+                    <span className="rounded-full bg-ok/15 px-2 py-1 text-xs font-semibold text-ok">
+                      類似度 {formatNumber(match.similarityScore, 1)}%
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs text-muted">
+                    Feature距離 {formatNumber(match.featureDistance, 4)} / DTW距離 {formatNumber(match.dtwDistance, 4)}
+                  </p>
+                  <ul className="mt-1 text-sm text-muted">
+                    {match.reasons.map((reason) => (
+                      <li key={`${match.date}-${reason.feature}`}>- {reason.note}</li>
+                    ))}
+                  </ul>
+                </div>
+              ))
+            )}
+          </div>
+        </article>
+      </section>
+    </>
+  );
+}

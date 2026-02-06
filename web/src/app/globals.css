@@ -1,0 +1,81 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #f4f1e7;
+  --fg: #1e2b2f;
+  --panel: #fffdfa;
+  --panel-strong: #f1ece2;
+  --muted: #58676b;
+  --accent: #005f73;
+  --accent-soft: #94d2bd;
+  --danger: #ae2012;
+  --warn: #ee9b00;
+  --ok: #2a9d8f;
+  --line: #d5cdbf;
+}
+
+@theme inline {
+  --color-background: var(--bg);
+  --color-foreground: var(--fg);
+  --color-panel: var(--panel);
+  --color-panel-strong: var(--panel-strong);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-danger: var(--danger);
+  --color-warn: var(--warn);
+  --color-ok: var(--ok);
+  --color-line: var(--line);
+  --font-sans: var(--font-body);
+  --font-display: var(--font-display);
+  --font-mono: var(--font-mono);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--fg);
+  font-family: var(--font-body), sans-serif;
+  background:
+    radial-gradient(circle at 12% 10%, rgba(0, 95, 115, 0.18), transparent 36%),
+    radial-gradient(circle at 88% 0%, rgba(238, 155, 0, 0.18), transparent 34%),
+    linear-gradient(180deg, #f7f2e8 0%, #f0ebdf 48%, #ede6d8 100%);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.app-shell {
+  width: min(1200px, 94vw);
+  margin: 0 auto;
+}
+
+.glass-card {
+  border: 1px solid rgba(88, 103, 107, 0.24);
+  background: linear-gradient(145deg, rgba(255, 253, 249, 0.96), rgba(246, 242, 233, 0.94));
+  border-radius: 18px;
+  box-shadow:
+    0 14px 28px -22px rgba(32, 43, 46, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+.metric-pill {
+  border: 1px solid rgba(0, 95, 115, 0.25);
+  background: rgba(148, 210, 189, 0.2);
+  border-radius: 999px;
+  padding: 0.35rem 0.8rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #0d4c57;
+}
+
+.nav-link-active {
+  background: rgba(0, 95, 115, 0.16);
+  color: #003642;
+}
