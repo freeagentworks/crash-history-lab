@@ -2,13 +2,24 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import type { Candle, CrashEvent } from "../lib/analytics/types";
-import { buildLinePath, formatNumber, formatPct, percentIfRatio } from "../lib/ui-utils";
+import type { Candle, CrashEvent, IndicatorPoint } from "../lib/analytics/types";
+import {
+  buildPathFromNullable,
+  formatNumber,
+  formatPct,
+  percentIfRatio,
+  clamp,
+} from "../lib/ui-utils";
+import { readUiSettings } from "../lib/ui-settings";
 
 type DetectionMode = "score" | "single";
 
 type MarketDataResponse = {
   candles: Candle[];
+};
+
+type IndicatorsResponse = {
+  points: IndicatorPoint[];
 };
 
 type CrashEventsResponse = {
@@ -17,10 +28,6 @@ type CrashEventsResponse = {
 
 function unique(values: string[]): string[] {
   return [...new Set(values)];
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
 }
 
 function parseTargets(raw: string | null): string[] {
@@ -35,12 +42,16 @@ function parseTargets(raw: string | null): string[] {
 
 export function CompareLive() {
   const searchParams = useSearchParams();
+  const uiSettings = useMemo(() => readUiSettings(), []);
 
   const initialSymbol = searchParams.get("symbol") ?? "^N225";
-  const initialRange = searchParams.get("range") ?? "10y";
-  const initialMode = (searchParams.get("mode") as DetectionMode | null) ?? "score";
-  const initialThreshold = Number(searchParams.get("threshold") ?? "70");
-  const initialCoolingDays = Number(searchParams.get("coolingDays") ?? "10");
+  const initialRange = searchParams.get("range") ?? uiSettings.defaultRange;
+  const initialMode =
+    (searchParams.get("mode") as DetectionMode | null) ?? uiSettings.defaultMode;
+  const initialThreshold = Number(searchParams.get("threshold") ?? String(uiSettings.threshold));
+  const initialCoolingDays = Number(
+    searchParams.get("coolingDays") ?? String(uiSettings.coolingDays),
+  );
   const initialTargets = parseTargets(searchParams.get("targets")).slice(0, 4);
 
   const [symbol, setSymbol] = useState(initialSymbol);
@@ -48,15 +59,21 @@ export function CompareLive() {
   const [mode, setMode] = useState<DetectionMode>(initialMode);
   const [threshold, setThreshold] = useState(initialThreshold);
   const [coolingDays, setCoolingDays] = useState(initialCoolingDays);
-  const [preDays, setPreDays] = useState(10);
-  const [postDays, setPostDays] = useState(50);
+  const [preDays, setPreDays] = useState(uiSettings.preDays);
+  const [postDays, setPostDays] = useState(uiSettings.postDays);
 
   const [candles, setCandles] = useState<Candle[]>([]);
+  const [indicatorPoints, setIndicatorPoints] = useState<IndicatorPoint[]>([]);
   const [events, setEvents] = useState<CrashEvent[]>([]);
   const [selectedDates, setSelectedDates] = useState<string[]>(initialTargets);
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const indicatorMap = useMemo(
+    () => new Map(indicatorPoints.map((point) => [point.date, point])),
+    [indicatorPoints],
+  );
 
   async function loadData() {
     setIsLoading(true);
@@ -69,31 +86,47 @@ export function CompareLive() {
       if (!marketResponse.ok) throw new Error("市場データの取得に失敗しました。");
       const market = (await marketResponse.json()) as MarketDataResponse;
 
-      const crashResponse = await fetch("/api/crash-events", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          symbol,
-          mode,
-          threshold,
-          coolingDays,
-          candles: market.candles,
-          singleRule:
-            mode === "single"
-              ? {
-                  feature: "drawdownRate",
-                  operator: "<=",
-                  value: -0.15,
-                }
-              : undefined,
+      const [indicatorsResponse, crashResponse] = await Promise.all([
+        fetch("/api/indicators", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            symbol,
+            candles: market.candles,
+            params: uiSettings.indicators,
+          }),
         }),
-      });
+        fetch("/api/crash-events", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            symbol,
+            mode,
+            threshold,
+            coolingDays,
+            candles: market.candles,
+            params: uiSettings.indicators,
+            singleRule:
+              mode === "single"
+                ? {
+                    feature: "drawdownRate",
+                    operator: "<=",
+                    value: -0.15,
+                  }
+                : undefined,
+          }),
+        }),
+      ]);
 
+      if (!indicatorsResponse.ok) throw new Error("指標計算の取得に失敗しました。");
       if (!crashResponse.ok) throw new Error("暴落判定の取得に失敗しました。");
+
+      const indicators = (await indicatorsResponse.json()) as IndicatorsResponse;
       const crash = (await crashResponse.json()) as CrashEventsResponse;
 
       const ranking = crash.ranking ?? [];
       setCandles(market.candles ?? []);
+      setIndicatorPoints(indicators.points ?? []);
       setEvents(ranking);
 
       setSelectedDates((prev) => {
@@ -105,6 +138,7 @@ export function CompareLive() {
       const message = err instanceof Error ? err.message : "不明なエラー";
       setError(message);
       setCandles([]);
+      setIndicatorPoints([]);
       setEvents([]);
       setSelectedDates([]);
     } finally {
@@ -137,16 +171,37 @@ export function CompareLive() {
         const start = clamp(idx - preDays, 0, candles.length - 1);
         const end = clamp(idx + postDays, 0, candles.length - 1);
         const window = candles.slice(start, end + 1);
-
         if (window.length < 2) return null;
 
-        const base = window[0].close || 1;
-        const normalized = window.map((candle) => (candle.close / base) * 100);
-        const path = buildLinePath(normalized, 620, 220);
+        const baseClose = window[0].close || 1;
+        const closePath = buildPathFromNullable(
+          window.map((candle) => (candle.close / baseClose) * 100),
+          620,
+          180,
+        );
+
+        const smaPath = buildPathFromNullable(
+          window.map((candle) => {
+            const sma = indicatorMap.get(candle.date)?.sma200;
+            if (sma == null || !Number.isFinite(sma)) return null;
+            return (sma / baseClose) * 100;
+          }),
+          620,
+          180,
+        );
+
+        const rsiPath = buildPathFromNullable(
+          window.map((candle) => indicatorMap.get(candle.date)?.rsi ?? null),
+          620,
+          90,
+          { min: 0, max: 100 },
+        );
 
         return {
           event,
-          path,
+          closePath,
+          smaPath,
+          rsiPath,
           markerIndex: idx - start,
           length: window.length,
         };
@@ -156,12 +211,14 @@ export function CompareLive() {
           item,
         ): item is {
           event: CrashEvent;
-          path: string;
+          closePath: string;
+          smaPath: string;
+          rsiPath: string;
           markerIndex: number;
           length: number;
         } => item != null,
       );
-  }, [selectedDates, events, candles, preDays, postDays]);
+  }, [selectedDates, events, candles, preDays, postDays, indicatorMap]);
 
   return (
     <>
@@ -274,9 +331,9 @@ export function CompareLive() {
         ) : (
           compareCards.map((card) => {
             const xMarker =
-              14 +
+              10 +
               (card.markerIndex / Math.max(card.length - 1, 1)) *
-                (620 - 28);
+                (620 - 20);
             const dd = percentIfRatio(card.event.metrics.drawdownRate);
             const speed = percentIfRatio(card.event.metrics.drawdownSpeed);
 
@@ -292,17 +349,28 @@ export function CompareLive() {
                 </div>
 
                 <div className="mt-4 rounded-xl border border-line bg-gradient-to-r from-panel to-[#f8f4ea] p-3">
-                  <svg viewBox="0 0 620 220" className="h-52 w-full">
-                    <path d={card.path} fill="none" stroke="#005f73" strokeWidth="3" />
+                  <p className="mb-1 text-xs text-muted">Close(青) / SMA200(橙)</p>
+                  <svg viewBox="0 0 620 180" className="h-44 w-full">
+                    <path d={card.closePath} fill="none" stroke="#005f73" strokeWidth="3" />
+                    <path d={card.smaPath} fill="none" stroke="#ee9b00" strokeWidth="2.2" />
                     <line
                       x1={xMarker}
                       x2={xMarker}
-                      y1={12}
-                      y2={208}
+                      y1={10}
+                      y2={170}
                       stroke="#ae2012"
-                      strokeWidth="2"
+                      strokeWidth="1.8"
                       strokeDasharray="6 4"
                     />
+                  </svg>
+                </div>
+
+                <div className="mt-2 rounded-xl border border-line bg-panel p-2">
+                  <p className="mb-1 text-xs text-muted">RSI</p>
+                  <svg viewBox="0 0 620 90" className="h-20 w-full">
+                    <line x1="10" y1="25" x2="610" y2="25" stroke="#999" strokeDasharray="4 3" strokeWidth="1" />
+                    <line x1="10" y1="65" x2="610" y2="65" stroke="#999" strokeDasharray="4 3" strokeWidth="1" />
+                    <path d={card.rsiPath} fill="none" stroke="#9b2226" strokeWidth="2.2" />
                   </svg>
                 </div>
 

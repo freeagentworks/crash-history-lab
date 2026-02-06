@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import type { Candle, CrashEvent } from "../lib/analytics/types";
 import { flatPresetSymbols } from "../lib/presets";
 import { formatNumber, formatPct, percentIfRatio } from "../lib/ui-utils";
+import { readUiSettings } from "../lib/ui-settings";
 
 type DetectionMode = "score" | "single";
 type SortBy = "score" | "drawdownSpeed" | "volumeShock";
@@ -25,11 +26,13 @@ const rangeOptions = [
 ];
 
 export function EventsLive() {
+  const initialSettings = useMemo(() => readUiSettings(), []);
+
   const [symbol, setSymbol] = useState("^N225");
-  const [range, setRange] = useState("10y");
-  const [mode, setMode] = useState<DetectionMode>("score");
-  const [threshold, setThreshold] = useState(70);
-  const [coolingDays, setCoolingDays] = useState(10);
+  const [range, setRange] = useState(initialSettings.defaultRange);
+  const [mode, setMode] = useState<DetectionMode>(initialSettings.defaultMode);
+  const [threshold, setThreshold] = useState(initialSettings.threshold);
+  const [coolingDays, setCoolingDays] = useState(initialSettings.coolingDays);
   const [sortBy, setSortBy] = useState<SortBy>("score");
 
   const [isLoading, setIsLoading] = useState(false);
@@ -112,6 +115,7 @@ export function EventsLive() {
           threshold,
           coolingDays,
           candles: market.candles,
+          params: initialSettings.indicators,
           singleRule:
             mode === "single"
               ? {

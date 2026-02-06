@@ -1,20 +1,13 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { defaultIndicatorParams } from "../lib/analytics/config";
-import type { IndicatorParams } from "../lib/analytics/types";
-
-const SETTINGS_KEY = "crash-history-lab.settings.v1";
-
-type UiSettings = {
-  defaultRange: string;
-  preDays: number;
-  postDays: number;
-  defaultMode: "score" | "single";
-  threshold: number;
-  coolingDays: number;
-  indicators: IndicatorParams;
-};
+import {
+  defaultUiSettings,
+  mergeUiSettings,
+  readUiSettings,
+  saveUiSettings,
+  type UiSettings,
+} from "../lib/ui-settings";
 
 type RowDef = {
   name: string;
@@ -22,91 +15,13 @@ type RowDef = {
   update: (value: number) => void;
 };
 
-const defaultSettings: UiSettings = {
-  defaultRange: "10y",
-  preDays: 10,
-  postDays: 50,
-  defaultMode: "score",
-  threshold: 70,
-  coolingDays: 10,
-  indicators: defaultIndicatorParams,
-};
-
 function toNumber(value: string): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function mergeSettings(partial: Partial<UiSettings>): UiSettings {
-  return {
-    ...defaultSettings,
-    ...partial,
-    indicators: {
-      ...defaultIndicatorParams,
-      ...partial.indicators,
-      zScore: {
-        ...defaultIndicatorParams.zScore,
-        ...partial.indicators?.zScore,
-      },
-      rsi: {
-        ...defaultIndicatorParams.rsi,
-        ...partial.indicators?.rsi,
-      },
-      crsi: {
-        ...defaultIndicatorParams.crsi,
-        ...partial.indicators?.crsi,
-      },
-      drawdown: {
-        ...defaultIndicatorParams.drawdown,
-        ...partial.indicators?.drawdown,
-      },
-      drawdownSpeed: {
-        ...defaultIndicatorParams.drawdownSpeed,
-        ...partial.indicators?.drawdownSpeed,
-      },
-      atr: {
-        ...defaultIndicatorParams.atr,
-        ...partial.indicators?.atr,
-      },
-      volumeShock: {
-        ...defaultIndicatorParams.volumeShock,
-        ...partial.indicators?.volumeShock,
-      },
-      ma200: {
-        ...defaultIndicatorParams.ma200,
-        ...partial.indicators?.ma200,
-      },
-      gapDown: {
-        ...defaultIndicatorParams.gapDown,
-        ...partial.indicators?.gapDown,
-      },
-      low52w: {
-        ...defaultIndicatorParams.low52w,
-        ...partial.indicators?.low52w,
-      },
-      breadth: {
-        ...defaultIndicatorParams.breadth,
-        ...partial.indicators?.breadth,
-      },
-    },
-  };
-}
-
-function readInitialSettings(): UiSettings {
-  if (typeof window === "undefined") return defaultSettings;
-
-  try {
-    const raw = localStorage.getItem(SETTINGS_KEY);
-    if (!raw) return defaultSettings;
-    const parsed = JSON.parse(raw) as Partial<UiSettings>;
-    return mergeSettings(parsed);
-  } catch {
-    return defaultSettings;
-  }
-}
-
 export function SettingsLive() {
-  const [settings, setSettings] = useState<UiSettings>(readInitialSettings);
+  const [settings, setSettings] = useState<UiSettings>(() => mergeUiSettings(readUiSettings()));
   const [message, setMessage] = useState("");
 
   const rows = useMemo<RowDef[]>(
@@ -257,13 +172,13 @@ export function SettingsLive() {
   );
 
   function save() {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-    setMessage("設定を保存しました。次の画面連携フェーズで全ページ共通適用します。");
+    saveUiSettings(settings);
+    setMessage("設定を保存しました。全画面の初期値に反映されます。再読込で適用されます。");
   }
 
   function reset() {
-    setSettings(defaultSettings);
-    localStorage.removeItem(SETTINGS_KEY);
+    setSettings(defaultUiSettings);
+    saveUiSettings(defaultUiSettings);
     setMessage("設定を初期化しました。");
   }
 

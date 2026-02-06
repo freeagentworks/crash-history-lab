@@ -3,8 +3,10 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { defaultCrashScoreWeights } from "../lib/analytics/config";
-import type { Candle, CrashEvent, CrashFeatureKey } from "../lib/analytics/types";
+import type { Candle, CrashEvent, CrashFeatureKey, IndicatorPoint } from "../lib/analytics/types";
 import { flatPresetSymbols } from "../lib/presets";
+import { formatNumber, formatPct, percentIfRatio } from "../lib/ui-utils";
+import { readUiSettings } from "../lib/ui-settings";
 
 type DetectionMode = "score" | "single";
 
@@ -12,11 +14,11 @@ type MarketDataResponse = {
   candles: Candle[];
 };
 
+type IndicatorsResponse = {
+  points: IndicatorPoint[];
+};
+
 type CrashEventsResponse = {
-  count: number;
-  mode: DetectionMode;
-  threshold: number;
-  events: CrashEvent[];
   ranking: CrashEvent[];
 };
 
@@ -46,38 +48,34 @@ const weightPills = Object.entries(defaultCrashScoreWeights).map(([key, value]) 
   weight: value,
 }));
 
-function formatNumber(value: number | null | undefined, digit = 2): string {
-  if (value == null || !Number.isFinite(value)) return "-";
-  return value.toFixed(digit);
-}
+function buildPathFromNullable(
+  values: Array<number | null>,
+  width: number,
+  height: number,
+  bounds?: { min: number; max: number },
+): string {
+  const valid = values
+    .map((value, index) => (value == null || !Number.isFinite(value) ? null : { index, value }))
+    .filter((point): point is { index: number; value: number } => point != null);
 
-function formatPct(value: number | null | undefined, digit = 1): string {
-  if (value == null || !Number.isFinite(value)) return "-";
-  return `${value.toFixed(digit)}%`;
-}
+  if (valid.length === 0) return "";
 
-function toPercentIfRatio(value: number | null | undefined): number | null {
-  if (value == null || !Number.isFinite(value)) return null;
-  if (Math.abs(value) <= 1.5) return value * 100;
-  return value;
-}
-
-function buildLinePath(values: number[], width: number, height: number): string {
-  if (values.length === 0) return "";
-  const padding = 14;
-  const min = Math.min(...values);
-  const max = Math.max(...values);
+  const padding = 10;
+  const min = bounds?.min ?? Math.min(...valid.map((point) => point.value));
+  const max = bounds?.max ?? Math.max(...valid.map((point) => point.value));
   const span = max - min || 1;
 
-  return values
-    .map((value, index) => {
-      const x = padding + (index / Math.max(values.length - 1, 1)) * (width - padding * 2);
+  return valid
+    .map((point, idx) => {
+      const x =
+        padding +
+        (point.index / Math.max(values.length - 1, 1)) * (width - padding * 2);
       const y =
         height -
         padding -
-        ((value - min) / span) * (height - padding * 2);
-      const cmd = index === 0 ? "M" : "L";
-      return `${cmd}${x.toFixed(1)} ${y.toFixed(1)}`;
+        ((point.value - min) / span) * (height - padding * 2);
+
+      return `${idx === 0 ? "M" : "L"}${x.toFixed(1)} ${y.toFixed(1)}`;
     })
     .join(" ");
 }
@@ -116,20 +114,28 @@ function computeAverageRecovery(candles: Candle[], events: CrashEvent[]): number
 }
 
 export function LiveDashboard() {
+  const initialSettings = useMemo(() => readUiSettings(), []);
+
   const [symbol, setSymbol] = useState("^N225");
-  const [range, setRange] = useState("10y");
-  const [mode, setMode] = useState<DetectionMode>("score");
-  const [threshold, setThreshold] = useState(70);
-  const [coolingDays, setCoolingDays] = useState(10);
-  const [preDays, setPreDays] = useState(10);
-  const [postDays, setPostDays] = useState(50);
+  const [range, setRange] = useState(initialSettings.defaultRange);
+  const [mode, setMode] = useState<DetectionMode>(initialSettings.defaultMode);
+  const [threshold, setThreshold] = useState(initialSettings.threshold);
+  const [coolingDays, setCoolingDays] = useState(initialSettings.coolingDays);
+  const [preDays, setPreDays] = useState(initialSettings.preDays);
+  const [postDays, setPostDays] = useState(initialSettings.postDays);
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [candles, setCandles] = useState<Candle[]>([]);
+  const [indicatorPoints, setIndicatorPoints] = useState<IndicatorPoint[]>([]);
   const [events, setEvents] = useState<CrashEvent[]>([]);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
+
+  const indicatorMap = useMemo(
+    () => new Map(indicatorPoints.map((point) => [point.date, point])),
+    [indicatorPoints],
+  );
 
   const selectedEvent = useMemo(
     () => events.find((event) => event.date === selectedDate) ?? null,
@@ -151,14 +157,41 @@ export function LiveDashboard() {
     return eventWindow.findIndex((candle) => candle.date === selectedEvent.date);
   }, [selectedEvent, eventWindow]);
 
-  const chartPath = useMemo(() => {
-    if (eventWindow.length === 0) return "";
-    return buildLinePath(
-      eventWindow.map((candle) => candle.close),
-      620,
-      240,
-    );
-  }, [eventWindow]);
+  const closePath = useMemo(
+    () => buildPathFromNullable(eventWindow.map((candle) => candle.close), 620, 240),
+    [eventWindow],
+  );
+
+  const smaPath = useMemo(
+    () =>
+      buildPathFromNullable(
+        eventWindow.map((candle) => indicatorMap.get(candle.date)?.sma200 ?? null),
+        620,
+        240,
+      ),
+    [eventWindow, indicatorMap],
+  );
+
+  const rsiPath = useMemo(
+    () =>
+      buildPathFromNullable(
+        eventWindow.map((candle) => indicatorMap.get(candle.date)?.rsi ?? null),
+        620,
+        100,
+        { min: 0, max: 100 },
+      ),
+    [eventWindow, indicatorMap],
+  );
+
+  const atrPath = useMemo(
+    () =>
+      buildPathFromNullable(
+        eventWindow.map((candle) => indicatorMap.get(candle.date)?.atrPct ?? null),
+        620,
+        100,
+      ),
+    [eventWindow, indicatorMap],
+  );
 
   const avgDrawdown = useMemo(() => computeAverageDrawdown(events), [events]);
   const avgRecovery = useMemo(
@@ -186,43 +219,86 @@ export function LiveDashboard() {
 
       const market = (await marketResponse.json()) as MarketDataResponse;
 
-      const crashResponse = await fetch("/api/crash-events", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          symbol: symbol.trim(),
-          mode,
-          threshold,
-          coolingDays,
-          candles: market.candles,
-          singleRule:
-            mode === "single"
-              ? {
-                  feature: "drawdownRate",
-                  operator: "<=",
-                  value: -0.15,
-                }
-              : undefined,
+      const [indicatorResponse, crashResponse] = await Promise.all([
+        fetch("/api/indicators", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            symbol: symbol.trim(),
+            candles: market.candles,
+            params: initialSettings.indicators,
+          }),
         }),
-      });
+        fetch("/api/crash-events", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            symbol: symbol.trim(),
+            mode,
+            threshold,
+            coolingDays,
+            candles: market.candles,
+            params: initialSettings.indicators,
+            singleRule:
+              mode === "single"
+                ? {
+                    feature: "drawdownRate",
+                    operator: "<=",
+                    value: -0.15,
+                  }
+                : undefined,
+          }),
+        }),
+      ]);
 
+      if (!indicatorResponse.ok) {
+        throw new Error("指標計算に失敗しました。");
+      }
       if (!crashResponse.ok) {
         throw new Error("暴落イベントの判定に失敗しました。");
       }
 
+      const indicators = (await indicatorResponse.json()) as IndicatorsResponse;
       const crash = (await crashResponse.json()) as CrashEventsResponse;
 
       const ranking = crash.ranking ?? [];
       setCandles(market.candles ?? []);
+      setIndicatorPoints(indicators.points ?? []);
       setEvents(ranking);
       setSelectedDate(ranking[0]?.date ?? null);
     } catch (err) {
       const message = err instanceof Error ? err.message : "不明なエラー";
       setError(message);
+      setCandles([]);
+      setIndicatorPoints([]);
+      setEvents([]);
+      setSelectedDate(null);
     } finally {
       setIsLoading(false);
     }
   }
+
+  const indicatorSnapshot = useMemo(() => {
+    if (!selectedEvent) return [] as Array<{ label: string; value: string }>;
+
+    const eventPoint = indicatorMap.get(selectedEvent.date);
+    if (!eventPoint) return [];
+
+    return [
+      { label: "Z値", value: formatNumber(eventPoint.zScore, 2) },
+      { label: "RSI", value: formatNumber(eventPoint.rsi, 2) },
+      { label: "CRSI", value: formatNumber(eventPoint.crsi, 2) },
+      { label: "DD率", value: formatPct(percentIfRatio(eventPoint.drawdownRate), 1) },
+      { label: "DD速度", value: formatPct(percentIfRatio(eventPoint.drawdownSpeed), 1) },
+      { label: "ATR%", value: formatPct(eventPoint.atrPct, 2) },
+      { label: "出来高Shock", value: `${formatNumber(eventPoint.volumeShock, 2)}x` },
+      { label: "200日線割れ", value: eventPoint.below200 == null ? "-" : eventPoint.below200 ? "Yes" : "No" },
+      { label: "200日線傾き", value: formatNumber(eventPoint.slope200, 4) },
+      { label: "ギャップ頻度", value: formatNumber(eventPoint.gapDownFreq, 1) },
+      { label: "52週安値", value: eventPoint.is52wLow == null ? "-" : eventPoint.is52wLow ? "Yes" : "No" },
+      { label: "ブレッドス", value: formatNumber(eventPoint.breadth, 1) },
+    ];
+  }, [selectedEvent, indicatorMap]);
 
   return (
     <>
@@ -391,8 +467,8 @@ export function LiveDashboard() {
                 ) : (
                   events.map((event) => {
                     const isSelected = event.date === selectedDate;
-                    const dd = toPercentIfRatio(event.metrics.drawdownRate);
-                    const d10 = toPercentIfRatio(event.metrics.drawdownSpeed);
+                    const dd = percentIfRatio(event.metrics.drawdownRate);
+                    const d10 = percentIfRatio(event.metrics.drawdownSpeed);
                     const vol = event.metrics.volumeShock;
 
                     return (
@@ -443,7 +519,7 @@ export function LiveDashboard() {
 
       <section className="glass-card p-4 md:p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="font-display text-lg font-semibold">イベント前後チャート</h2>
+          <h2 className="font-display text-lg font-semibold">イベント前後チャート（価格 + 指標）</h2>
           <div className="flex gap-2 text-xs md:text-sm">
             <span className="rounded-full bg-panel-strong px-3 py-1">前{preDays}日</span>
             <span className="rounded-full bg-panel-strong px-3 py-1">後{postDays}日</span>
@@ -454,30 +530,48 @@ export function LiveDashboard() {
         {eventWindow.length === 0 ? (
           <p className="mt-4 text-sm text-muted">ランキングからイベントを選択すると表示されます。</p>
         ) : (
-          <div className="mt-4 grid gap-4 lg:grid-cols-[1.4fr_1fr]">
-            <div className="rounded-xl border border-line bg-gradient-to-br from-panel to-[#f8f1e4] p-3">
-              <svg viewBox="0 0 620 240" className="h-60 w-full">
-                <path d={chartPath} fill="none" stroke="#005f73" strokeWidth="3.5" />
-                {eventMarkerIndex >= 0 ? (
-                  <line
-                    x1={14 + (eventMarkerIndex / Math.max(eventWindow.length - 1, 1)) * (620 - 28)}
-                    x2={14 + (eventMarkerIndex / Math.max(eventWindow.length - 1, 1)) * (620 - 28)}
-                    y1={12}
-                    y2={228}
-                    stroke="#ae2012"
-                    strokeWidth="2"
-                    strokeDasharray="6 4"
-                  />
-                ) : null}
-              </svg>
-              <p className="mt-2 text-xs text-muted">
-                実装上は価格ライン表示。次段階でローソク足 + 全インジケータ重ね描画に拡張します。
-              </p>
+          <div className="mt-4 grid gap-4 lg:grid-cols-[1.45fr_1fr]">
+            <div className="space-y-3 rounded-xl border border-line bg-gradient-to-br from-panel to-[#f8f1e4] p-3">
+              <div>
+                <p className="mb-1 text-xs text-muted">Close (青) / SMA200 (橙)</p>
+                <svg viewBox="0 0 620 240" className="h-56 w-full">
+                  <path d={closePath} fill="none" stroke="#005f73" strokeWidth="3.2" />
+                  <path d={smaPath} fill="none" stroke="#ee9b00" strokeWidth="2.4" />
+                  {eventMarkerIndex >= 0 ? (
+                    <line
+                      x1={14 + (eventMarkerIndex / Math.max(eventWindow.length - 1, 1)) * (620 - 28)}
+                      x2={14 + (eventMarkerIndex / Math.max(eventWindow.length - 1, 1)) * (620 - 28)}
+                      y1={12}
+                      y2={228}
+                      stroke="#ae2012"
+                      strokeWidth="2"
+                      strokeDasharray="6 4"
+                    />
+                  ) : null}
+                </svg>
+              </div>
+
+              <div>
+                <p className="mb-1 text-xs text-muted">RSI</p>
+                <svg viewBox="0 0 620 100" className="h-24 w-full">
+                  <line x1="10" y1="30" x2="610" y2="30" stroke="#999" strokeDasharray="4 3" strokeWidth="1" />
+                  <line x1="10" y1="70" x2="610" y2="70" stroke="#999" strokeDasharray="4 3" strokeWidth="1" />
+                  <path d={rsiPath} fill="none" stroke="#9b2226" strokeWidth="2.5" />
+                </svg>
+              </div>
+
+              <div>
+                <p className="mb-1 text-xs text-muted">ATR%</p>
+                <svg viewBox="0 0 620 100" className="h-24 w-full">
+                  <path d={atrPath} fill="none" stroke="#2a9d8f" strokeWidth="2.5" />
+                </svg>
+              </div>
             </div>
 
             <div className="rounded-xl border border-line bg-panel p-3">
               <h3 className="font-display text-base font-semibold">選択イベント</h3>
               <p className="mt-1 font-mono text-sm text-muted">{selectedEvent?.date ?? "-"}</p>
+
               <div className="mt-3 flex flex-wrap gap-2">
                 {selectedEvent?.signals && Object.keys(selectedEvent.signals).length > 0 ? (
                   (Object.entries(selectedEvent.signals) as Array<[CrashFeatureKey, number]>).map(
@@ -490,6 +584,15 @@ export function LiveDashboard() {
                 ) : (
                   <p className="text-sm text-muted">シグナル内訳なし</p>
                 )}
+              </div>
+
+              <div className="mt-3 grid max-h-56 grid-cols-2 gap-2 overflow-auto text-xs">
+                {indicatorSnapshot.map((item) => (
+                  <div key={item.label} className="rounded-lg bg-panel-strong px-2 py-1.5">
+                    <p className="text-muted">{item.label}</p>
+                    <p className="font-semibold text-foreground">{item.value}</p>
+                  </div>
+                ))}
               </div>
             </div>
           </div>

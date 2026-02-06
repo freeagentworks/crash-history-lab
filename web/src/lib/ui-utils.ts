@@ -35,6 +35,38 @@ export function buildLinePath(values: number[], width: number, height: number): 
     .join(" ");
 }
 
+export function buildPathFromNullable(
+  values: Array<number | null>,
+  width: number,
+  height: number,
+  bounds?: { min: number; max: number },
+): string {
+  const valid = values
+    .map((value, index) => (value == null || !Number.isFinite(value) ? null : { index, value }))
+    .filter((point): point is { index: number; value: number } => point != null);
+
+  if (valid.length === 0) return "";
+
+  const padding = 10;
+  const min = bounds?.min ?? Math.min(...valid.map((point) => point.value));
+  const max = bounds?.max ?? Math.max(...valid.map((point) => point.value));
+  const span = max - min || 1;
+
+  return valid
+    .map((point, idx) => {
+      const x =
+        padding +
+        (point.index / Math.max(values.length - 1, 1)) * (width - padding * 2);
+      const y =
+        height -
+        padding -
+        ((point.value - min) / span) * (height - padding * 2);
+
+      return `${idx === 0 ? "M" : "L"}${x.toFixed(1)} ${y.toFixed(1)}`;
+    })
+    .join(" ");
+}
+
 export function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }

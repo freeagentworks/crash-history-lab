@@ -3,7 +3,14 @@
 import { useMemo, useState } from "react";
 import type { Candle, CrashEvent } from "../lib/analytics/types";
 import { flatPresetSymbols } from "../lib/presets";
-import { formatNumber, formatPct, percentIfRatio } from "../lib/ui-utils";
+import {
+  buildPathFromNullable,
+  clamp,
+  formatNumber,
+  formatPct,
+  percentIfRatio,
+} from "../lib/ui-utils";
+import { readUiSettings } from "../lib/ui-settings";
 
 type DetectionMode = "score" | "single";
 
@@ -28,15 +35,39 @@ type SimilarResponse = {
   matches: SimilarMatch[];
 };
 
+function buildEventSparkline(
+  candles: Candle[],
+  date: string,
+  preDays: number,
+  postDays: number,
+): string {
+  const idx = candles.findIndex((candle) => candle.date === date);
+  if (idx < 0) return "";
+
+  const start = clamp(idx - preDays, 0, candles.length - 1);
+  const end = clamp(idx + postDays, 0, candles.length - 1);
+  const window = candles.slice(start, end + 1);
+  if (window.length < 2) return "";
+
+  const base = window[0].close || 1;
+  return buildPathFromNullable(
+    window.map((candle) => (candle.close / base) * 100),
+    460,
+    110,
+  );
+}
+
 export function SimilarLive() {
+  const uiSettings = useMemo(() => readUiSettings(), []);
+
   const [symbol, setSymbol] = useState("^N225");
-  const [range, setRange] = useState("10y");
-  const [mode, setMode] = useState<DetectionMode>("score");
-  const [threshold, setThreshold] = useState(70);
-  const [coolingDays, setCoolingDays] = useState(10);
+  const [range, setRange] = useState(uiSettings.defaultRange);
+  const [mode, setMode] = useState<DetectionMode>(uiSettings.defaultMode);
+  const [threshold, setThreshold] = useState(uiSettings.threshold);
+  const [coolingDays, setCoolingDays] = useState(uiSettings.coolingDays);
   const [topN, setTopN] = useState(5);
-  const [preDays, setPreDays] = useState(10);
-  const [postDays, setPostDays] = useState(50);
+  const [preDays, setPreDays] = useState(uiSettings.preDays);
+  const [postDays, setPostDays] = useState(uiSettings.postDays);
 
   const [candles, setCandles] = useState<Candle[]>([]);
   const [events, setEvents] = useState<CrashEvent[]>([]);
@@ -50,6 +81,11 @@ export function SimilarLive() {
   const targetEvent = useMemo(
     () => events.find((event) => event.date === targetDate) ?? null,
     [events, targetDate],
+  );
+
+  const targetSparkline = useMemo(
+    () => buildEventSparkline(candles, targetDate, preDays, postDays),
+    [candles, targetDate, preDays, postDays],
   );
 
   async function loadEvents() {
@@ -77,6 +113,7 @@ export function SimilarLive() {
           threshold,
           coolingDays,
           candles: market.candles,
+          params: uiSettings.indicators,
           singleRule:
             mode === "single"
               ? {
@@ -305,7 +342,12 @@ export function SimilarLive() {
                   10d {formatPct(percentIfRatio(targetEvent.metrics.drawdownSpeed), 1)}
                 </span>
               </div>
-              <p className="mt-3 text-sm text-muted">
+              <div className="mt-3 rounded-lg border border-line bg-panel p-2">
+                <svg viewBox="0 0 460 110" className="h-24 w-full">
+                  <path d={targetSparkline} fill="none" stroke="#005f73" strokeWidth="2.8" />
+                </svg>
+              </div>
+              <p className="mt-2 text-xs text-muted">
                 検索範囲: 同一銘柄内（初期値） / データ本数 {candles.length.toLocaleString()}
               </p>
             </div>
@@ -320,26 +362,34 @@ export function SimilarLive() {
             {matches.length === 0 ? (
               <p className="text-sm text-muted">検索結果はまだありません。</p>
             ) : (
-              matches.map((match, index) => (
-                <div key={match.date} className="rounded-xl border border-line bg-panel px-3 py-2">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="font-semibold">
-                      #{index + 1} {symbol} <span className="font-mono text-xs text-muted">{match.date}</span>
+              matches.map((match, index) => {
+                const sparkline = buildEventSparkline(candles, match.date, preDays, postDays);
+                return (
+                  <div key={match.date} className="rounded-xl border border-line bg-panel px-3 py-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="font-semibold">
+                        #{index + 1} {symbol} <span className="font-mono text-xs text-muted">{match.date}</span>
+                      </p>
+                      <span className="rounded-full bg-ok/15 px-2 py-1 text-xs font-semibold text-ok">
+                        類似度 {formatNumber(match.similarityScore, 1)}%
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs text-muted">
+                      Feature距離 {formatNumber(match.featureDistance, 4)} / DTW距離 {formatNumber(match.dtwDistance, 4)}
                     </p>
-                    <span className="rounded-full bg-ok/15 px-2 py-1 text-xs font-semibold text-ok">
-                      類似度 {formatNumber(match.similarityScore, 1)}%
-                    </span>
+                    <div className="mt-1 rounded-lg border border-line bg-panel-strong p-1.5">
+                      <svg viewBox="0 0 460 100" className="h-16 w-full">
+                        <path d={sparkline} fill="none" stroke="#2a9d8f" strokeWidth="2.2" />
+                      </svg>
+                    </div>
+                    <ul className="mt-1 text-sm text-muted">
+                      {match.reasons.map((reason) => (
+                        <li key={`${match.date}-${reason.feature}`}>- {reason.note}</li>
+                      ))}
+                    </ul>
                   </div>
-                  <p className="mt-1 text-xs text-muted">
-                    Feature距離 {formatNumber(match.featureDistance, 4)} / DTW距離 {formatNumber(match.dtwDistance, 4)}
-                  </p>
-                  <ul className="mt-1 text-sm text-muted">
-                    {match.reasons.map((reason) => (
-                      <li key={`${match.date}-${reason.feature}`}>- {reason.note}</li>
-                    ))}
-                  </ul>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         </article>

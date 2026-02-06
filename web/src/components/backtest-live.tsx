@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { backtestTemplates, type BacktestTemplateId } from "../lib/backtest-templates";
 import { flatPresetSymbols } from "../lib/presets";
 import { buildLinePath, formatNumber, formatPct } from "../lib/ui-utils";
+import { readUiSettings } from "../lib/ui-settings";
 
 type BacktestResponse = {
   eventCount: number;
@@ -46,13 +47,43 @@ const metricLabels = [
   ["trades", "トレード数"],
 ] as const;
 
+function toCsvValue(value: string | number): string {
+  const text = String(value);
+  if (text.includes(",") || text.includes("\"") || text.includes("\n")) {
+    return `"${text.replaceAll("\"", "\"\"")}"`;
+  }
+  return text;
+}
+
+function downloadCsv(filename: string, rows: Array<Record<string, string | number>>): void {
+  if (rows.length === 0) return;
+
+  const headers = Object.keys(rows[0]);
+  const lines = [
+    headers.join(","),
+    ...rows.map((row) => headers.map((header) => toCsvValue(row[header] ?? "")).join(",")),
+  ];
+
+  const blob = new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.setAttribute("download", filename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
 export function BacktestLive() {
+  const uiSettings = useMemo(() => readUiSettings(), []);
+
   const [symbol, setSymbol] = useState("^N225");
-  const [range, setRange] = useState("10y");
+  const [range, setRange] = useState(uiSettings.defaultRange);
   const [templateId, setTemplateId] = useState<BacktestTemplateId>("mean-rebound");
-  const [mode, setMode] = useState<"score" | "single">("score");
-  const [threshold, setThreshold] = useState(70);
-  const [coolingDays, setCoolingDays] = useState(10);
+  const [mode, setMode] = useState<"score" | "single">(uiSettings.defaultMode);
+  const [threshold, setThreshold] = useState(uiSettings.threshold);
+  const [coolingDays, setCoolingDays] = useState(uiSettings.coolingDays);
 
   const [entryThreshold, setEntryThreshold] = useState(70);
   const [rsiMax, setRsiMax] = useState(35);
@@ -94,6 +125,7 @@ export function BacktestLive() {
           mode,
           threshold,
           coolingDays,
+          params: uiSettings.indicators,
           backtestParams: {
             entryThreshold,
             rsiMax,
@@ -367,7 +399,49 @@ export function BacktestLive() {
       </section>
 
       <section className="glass-card p-4 md:p-5">
-        <h2 className="font-display text-lg font-semibold">トレード一覧</h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="font-display text-lg font-semibold">トレード一覧</h2>
+          <div className="flex gap-2">
+            <button
+              className="rounded-lg border border-line px-3 py-1.5 text-xs hover:border-accent hover:text-accent disabled:opacity-40"
+              disabled={!result || result.trades.length === 0}
+              onClick={() =>
+                result &&
+                downloadCsv(
+                  `backtest_trades_${symbol}_${templateId}.csv`,
+                  result.trades.map((trade) => ({
+                    entryDate: trade.entryDate,
+                    exitDate: trade.exitDate,
+                    entryPrice: trade.entryPrice,
+                    exitPrice: trade.exitPrice,
+                    grossReturnPct: trade.grossReturnPct,
+                    netReturnPct: trade.netReturnPct,
+                    holdingDays: trade.holdingDays,
+                    exitReason: trade.exitReason,
+                  })),
+                )
+              }
+            >
+              Trades CSV
+            </button>
+            <button
+              className="rounded-lg border border-line px-3 py-1.5 text-xs hover:border-accent hover:text-accent disabled:opacity-40"
+              disabled={!result || result.equityCurve.length === 0}
+              onClick={() =>
+                result &&
+                downloadCsv(
+                  `backtest_equity_${symbol}_${templateId}.csv`,
+                  result.equityCurve.map((point) => ({
+                    date: point.date,
+                    equity: point.equity,
+                  })),
+                )
+              }
+            >
+              Equity CSV
+            </button>
+          </div>
+        </div>
         {!result || result.trades.length === 0 ? (
           <p className="mt-3 text-sm text-muted">トレードがありません。</p>
         ) : (
