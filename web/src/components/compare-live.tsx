@@ -6,11 +6,14 @@ import { useSearchParams } from "next/navigation";
 import type { Candle, CrashEvent, IndicatorParams, IndicatorPoint } from "../lib/analytics/types";
 import { buildEventDetailHref } from "../lib/navigation";
 import {
+  buildCandlestickGlyphs,
+  computePriceBounds,
   buildPathFromNullable,
   formatNumber,
   formatPct,
   percentIfRatio,
   clamp,
+  resolveCandlestickBodyWidth,
 } from "../lib/ui-utils";
 import { readUiSettings } from "../lib/ui-settings";
 
@@ -209,21 +212,29 @@ export function CompareLive() {
         if (window.length < 2) return null;
 
         const baseClose = window[0].close || 1;
-        const closePath = buildPathFromNullable(
-          window.map((candle) => (candle.close / baseClose) * 100),
-          620,
-          180,
-        );
+        const normalizedWindow = window.map((candle) => ({
+          ...candle,
+          open: (candle.open / baseClose) * 100,
+          high: (candle.high / baseClose) * 100,
+          low: (candle.low / baseClose) * 100,
+          close: (candle.close / baseClose) * 100,
+        }));
+        const smaSeries = window.map((candle) => {
+          const sma = indicatorMap.get(candle.date)?.sma200;
+          if (sma == null || !Number.isFinite(sma)) return null;
+          return (sma / baseClose) * 100;
+        });
+        const priceBounds = computePriceBounds(normalizedWindow, smaSeries);
+        if (!priceBounds) return null;
 
         const smaPath = buildPathFromNullable(
-          window.map((candle) => {
-            const sma = indicatorMap.get(candle.date)?.sma200;
-            if (sma == null || !Number.isFinite(sma)) return null;
-            return (sma / baseClose) * 100;
-          }),
+          smaSeries,
           620,
           180,
+          priceBounds,
         );
+        const candlesticks = buildCandlestickGlyphs(normalizedWindow, 620, 180, priceBounds, 10);
+        const candleBodyWidth = resolveCandlestickBodyWidth(normalizedWindow.length, 620, 10);
 
         const rsiPath = buildPathFromNullable(
           window.map((candle) => indicatorMap.get(candle.date)?.rsi ?? null),
@@ -234,7 +245,8 @@ export function CompareLive() {
 
         return {
           event,
-          closePath,
+          candlesticks,
+          candleBodyWidth,
           smaPath,
           rsiPath,
           markerIndex: idx - start,
@@ -246,7 +258,8 @@ export function CompareLive() {
           item,
         ): item is {
           event: CrashEvent;
-          closePath: string;
+          candlesticks: ReturnType<typeof buildCandlestickGlyphs>;
+          candleBodyWidth: number;
           smaPath: string;
           rsiPath: string;
           markerIndex: number;
@@ -365,10 +378,7 @@ export function CompareLive() {
           </article>
         ) : (
           compareCards.map((card) => {
-            const xMarker =
-              10 +
-              (card.markerIndex / Math.max(card.length - 1, 1)) *
-                (620 - 20);
+            const xMarker = card.candlesticks[card.markerIndex]?.x ?? 10;
             const dd = percentIfRatio(card.event.metrics.drawdownRate);
             const speed = percentIfRatio(card.event.metrics.drawdownSpeed);
 
@@ -396,9 +406,29 @@ export function CompareLive() {
                 </div>
 
                 <div className="mt-4 rounded-xl border border-line bg-gradient-to-r from-panel to-[#f8f4ea] p-3">
-                  <p className="mb-1 text-xs text-muted">Close(青) / SMA200(橙)</p>
+                  <p className="mb-1 text-xs text-muted">ローソク足(上昇=青, 下落=朱) / SMA200(橙)</p>
                   <svg viewBox="0 0 620 180" className="h-44 w-full">
-                    <path d={card.closePath} fill="none" stroke="#005f73" strokeWidth="3" />
+                    {card.candlesticks.map((candle) => (
+                      <g key={candle.date}>
+                        <line
+                          x1={candle.x}
+                          x2={candle.x}
+                          y1={candle.wickTopY}
+                          y2={candle.wickBottomY}
+                          stroke={candle.isUp ? "#0a9396" : "#bb3e03"}
+                          strokeWidth="1.1"
+                        />
+                        <rect
+                          x={candle.x - card.candleBodyWidth / 2}
+                          y={candle.bodyTopY}
+                          width={card.candleBodyWidth}
+                          height={candle.bodyHeight}
+                          fill={candle.isUp ? "#0a9396" : "#bb3e03"}
+                          opacity="0.88"
+                          rx="1"
+                        />
+                      </g>
+                    ))}
                     <path d={card.smaPath} fill="none" stroke="#ee9b00" strokeWidth="2.2" />
                     <line
                       x1={xMarker}
