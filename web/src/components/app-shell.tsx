@@ -3,14 +3,16 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
+import { getDictionary } from "../lib/i18n";
 
+const dictionary = getDictionary("ja");
 const links = [
-  { href: "/", label: "ダッシュボード" },
-  { href: "/events", label: "イベント" },
-  { href: "/compare", label: "比較" },
-  { href: "/similar", label: "類似検索" },
-  { href: "/backtest", label: "バックテスト" },
-  { href: "/settings", label: "設定" },
+  { href: "/", label: dictionary.nav.dashboard },
+  { href: "/events", label: dictionary.nav.events },
+  { href: "/compare", label: dictionary.nav.compare },
+  { href: "/similar", label: dictionary.nav.similar },
+  { href: "/backtest", label: dictionary.nav.backtest },
+  { href: "/settings", label: dictionary.nav.settings },
 ];
 
 type AppShellProps = {
@@ -29,7 +31,7 @@ export function AppShell({ title, subtitle, children }: AppShellProps) {
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="space-y-2">
               <p className="inline-flex items-center gap-2 rounded-full bg-accent/15 px-3 py-1 text-xs font-semibold tracking-wide text-accent">
-                CRASH HISTORY LAB
+                {dictionary.shell.badge}
               </p>
               <h1 className="font-display text-2xl font-bold tracking-tight text-foreground md:text-3xl">
                 {title}
@@ -38,12 +40,12 @@ export function AppShell({ title, subtitle, children }: AppShellProps) {
             </div>
             <div className="grid gap-2 text-sm text-muted sm:grid-cols-2">
               <div className="glass-card px-3 py-2">
-                <p className="text-xs uppercase tracking-wide">取得対象</p>
-                <p className="font-mono font-semibold text-foreground">Yahoo Finance / Daily</p>
+                <p className="text-xs uppercase tracking-wide">{dictionary.shell.sourceLabel}</p>
+                <p className="font-mono font-semibold text-foreground">{dictionary.shell.sourceValue}</p>
               </div>
               <div className="glass-card px-3 py-2">
-                <p className="text-xs uppercase tracking-wide">モード</p>
-                <p className="font-semibold text-foreground">研究・教育</p>
+                <p className="text-xs uppercase tracking-wide">{dictionary.shell.modeLabel}</p>
+                <p className="font-semibold text-foreground">{dictionary.shell.modeValue}</p>
               </div>
             </div>
           </div>
@@ -72,8 +74,7 @@ export function AppShell({ title, subtitle, children }: AppShellProps) {
         <main className="space-y-5">{children}</main>
 
         <footer className="glass-card p-4 text-xs leading-relaxed text-muted md:text-sm">
-          本アプリは研究・教育目的の情報ツールです。特定銘柄の売買推奨や投資助言を目的としません。
-          投資判断はご自身の責任で行ってください。
+          {dictionary.shell.disclaimer}
         </footer>
       </div>
     </div>

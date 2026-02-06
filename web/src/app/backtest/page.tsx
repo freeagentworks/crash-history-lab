@@ -1,11 +1,14 @@
 import { AppShell } from "../../components/app-shell";
 import { BacktestLive } from "../../components/backtest-live";
+import { getDictionary } from "../../lib/i18n";
+
+const dictionary = getDictionary("ja");
 
 export default function BacktestPage() {
   return (
     <AppShell
-      title="バックテスト（テンプレート方式）"
-      subtitle="逆張りリバウンドと200日線回復順張りを初期テンプレートとして検証します。"
+      title={dictionary.pages.backtest.title}
+      subtitle={dictionary.pages.backtest.subtitle}
     >
       <BacktestLive />
     </AppShell>
