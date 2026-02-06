@@ -6,7 +6,15 @@ import { defaultCrashScoreWeights } from "../lib/analytics/config";
 import type { Candle, CrashEvent, CrashFeatureKey, IndicatorPoint } from "../lib/analytics/types";
 import { flatPresetSymbols } from "../lib/presets";
 import { buildEventDetailHref } from "../lib/navigation";
-import { buildPathFromNullable, formatNumber, formatPct, percentIfRatio } from "../lib/ui-utils";
+import {
+  buildCandlestickGlyphs,
+  buildPathFromNullable,
+  computePriceBounds,
+  formatNumber,
+  formatPct,
+  percentIfRatio,
+  resolveCandlestickBodyWidth,
+} from "../lib/ui-utils";
 import { readUiSettings } from "../lib/ui-settings";
 
 type DetectionMode = "score" | "single";
@@ -126,9 +134,23 @@ export function LiveDashboard() {
     return eventWindow.findIndex((candle) => candle.date === selectedEvent.date);
   }, [selectedEvent, eventWindow]);
 
-  const closePath = useMemo(
-    () => buildPathFromNullable(eventWindow.map((candle) => candle.close), 620, 240),
-    [eventWindow],
+  const priceBounds = useMemo(
+    () =>
+      computePriceBounds(
+        eventWindow,
+        eventWindow.map((candle) => indicatorMap.get(candle.date)?.sma200 ?? null),
+      ),
+    [eventWindow, indicatorMap],
+  );
+
+  const candlesticks = useMemo(
+    () => (priceBounds ? buildCandlestickGlyphs(eventWindow, 620, 240, priceBounds) : []),
+    [eventWindow, priceBounds],
+  );
+
+  const candleBodyWidth = useMemo(
+    () => resolveCandlestickBodyWidth(eventWindow.length, 620),
+    [eventWindow.length],
   );
 
   const smaPath = useMemo(
@@ -137,8 +159,9 @@ export function LiveDashboard() {
         eventWindow.map((candle) => indicatorMap.get(candle.date)?.sma200 ?? null),
         620,
         240,
+        priceBounds ?? undefined,
       ),
-    [eventWindow, indicatorMap],
+    [eventWindow, indicatorMap, priceBounds],
   );
 
   const rsiPath = useMemo(
@@ -421,22 +444,22 @@ export function LiveDashboard() {
         </div>
       </section>
 
-      <section className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
+      <section className="grid gap-4 lg:grid-cols-[1.65fr_0.75fr]">
         <div className="glass-card overflow-hidden">
           <div className="border-b border-line px-4 py-3 md:px-5">
             <h2 className="font-display text-lg font-semibold">暴落ランキング</h2>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[700px] text-sm">
+          <div className="overflow-x-auto lg:overflow-x-visible">
+            <table className="w-full min-w-[640px] lg:min-w-0 text-sm">
               <thead className="bg-panel-strong text-left text-xs uppercase tracking-wide text-muted">
                 <tr>
-                  <th className="px-4 py-3">日付</th>
-                  <th className="px-4 py-3">銘柄</th>
-                  <th className="px-4 py-3">Score</th>
-                  <th className="px-4 py-3">DD</th>
-                  <th className="px-4 py-3">10d</th>
-                  <th className="px-4 py-3">出来高Shock</th>
-                  <th className="px-4 py-3">詳細</th>
+                  <th className="px-3 py-3">日付</th>
+                  <th className="px-3 py-3">銘柄</th>
+                  <th className="px-3 py-3">Score</th>
+                  <th className="px-3 py-3">DD</th>
+                  <th className="px-3 py-3">10d</th>
+                  <th className="px-3 py-3">出来高Shock</th>
+                  <th className="px-3 py-3 w-16">詳細</th>
                 </tr>
               </thead>
               <tbody>
@@ -461,15 +484,15 @@ export function LiveDashboard() {
                         }`}
                         onClick={() => setSelectedDate(event.date)}
                       >
-                        <td className="px-4 py-2.5 font-mono">{event.date}</td>
-                        <td className="px-4 py-2.5">{event.symbol ?? symbol}</td>
-                        <td className="px-4 py-2.5 font-semibold text-danger">
+                        <td className="px-3 py-2.5 font-mono whitespace-nowrap">{event.date}</td>
+                        <td className="px-3 py-2.5 whitespace-nowrap">{event.symbol ?? symbol}</td>
+                        <td className="px-3 py-2.5 font-semibold text-danger whitespace-nowrap">
                           {formatNumber(event.crashScore, 1)}
                         </td>
-                        <td className="px-4 py-2.5 text-danger">{formatPct(dd, 1)}</td>
-                        <td className="px-4 py-2.5 text-danger">{formatPct(d10, 1)}</td>
-                        <td className="px-4 py-2.5">{vol == null ? "-" : `${vol.toFixed(2)}x`}</td>
-                        <td className="px-4 py-2.5">
+                        <td className="px-3 py-2.5 text-danger whitespace-nowrap">{formatPct(dd, 1)}</td>
+                        <td className="px-3 py-2.5 text-danger whitespace-nowrap">{formatPct(d10, 1)}</td>
+                        <td className="px-3 py-2.5 whitespace-nowrap">{vol == null ? "-" : `${vol.toFixed(2)}x`}</td>
+                        <td className="px-3 py-2.5 whitespace-nowrap">
                           <Link
                             href={buildEventDetailHref({
                               symbol: event.symbol ?? symbol,
@@ -519,14 +542,34 @@ export function LiveDashboard() {
           <div className="mt-4 grid gap-4 lg:grid-cols-[1.45fr_1fr]">
             <div className="space-y-3 rounded-xl border border-line bg-gradient-to-br from-panel to-[#f8f1e4] p-3">
               <div>
-                <p className="mb-1 text-xs text-muted">Close (青) / SMA200 (橙)</p>
+                <p className="mb-1 text-xs text-muted">ローソク足 (上昇=青, 下落=朱) / SMA200 (橙)</p>
                 <svg viewBox="0 0 620 240" className="h-56 w-full">
-                  <path d={closePath} fill="none" stroke="#005f73" strokeWidth="3.2" />
+                  {candlesticks.map((candle) => (
+                    <g key={candle.date}>
+                      <line
+                        x1={candle.x}
+                        x2={candle.x}
+                        y1={candle.wickTopY}
+                        y2={candle.wickBottomY}
+                        stroke={candle.isUp ? "#0a9396" : "#bb3e03"}
+                        strokeWidth="1.2"
+                      />
+                      <rect
+                        x={candle.x - candleBodyWidth / 2}
+                        y={candle.bodyTopY}
+                        width={candleBodyWidth}
+                        height={candle.bodyHeight}
+                        fill={candle.isUp ? "#0a9396" : "#bb3e03"}
+                        opacity="0.88"
+                        rx="1"
+                      />
+                    </g>
+                  ))}
                   <path d={smaPath} fill="none" stroke="#ee9b00" strokeWidth="2.4" />
                   {eventMarkerIndex >= 0 ? (
                     <line
-                      x1={14 + (eventMarkerIndex / Math.max(eventWindow.length - 1, 1)) * (620 - 28)}
-                      x2={14 + (eventMarkerIndex / Math.max(eventWindow.length - 1, 1)) * (620 - 28)}
+                      x1={candlesticks[eventMarkerIndex]?.x ?? 14}
+                      x2={candlesticks[eventMarkerIndex]?.x ?? 14}
                       y1={12}
                       y2={228}
                       stroke="#ae2012"

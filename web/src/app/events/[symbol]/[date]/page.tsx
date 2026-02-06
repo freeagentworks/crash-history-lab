@@ -6,11 +6,14 @@ import type { CrashFeatureKey, CrashEvent, IndicatorPoint } from "../../../../li
 import { fetchYahooCandles } from "../../../../lib/analytics/yahoo";
 import { buildEventsListHref, type EventDetailContext, parseEventDetailContext } from "../../../../lib/navigation";
 import {
-  buildLinePath,
+  buildCandlestickGlyphs,
   buildPathFromNullable,
+  computePriceBounds,
   formatNumber,
   formatPct,
   percentIfRatio,
+  resolveCandlestickBodyWidth,
+  type CandlestickGlyph,
 } from "../../../../lib/ui-utils";
 
 type EventDetailPageProps = {
@@ -20,7 +23,8 @@ type EventDetailPageProps = {
 
 type EventDetailData = {
   event: CrashEvent;
-  closePath: string;
+  candlesticks: CandlestickGlyph[];
+  candleBodyWidth: number;
   smaPath: string;
   rsiPath: string;
   atrPath: string;
@@ -102,15 +106,20 @@ async function loadEventDetail(
 
   const pointMap = new Map(indicators.points.map((point) => [point.date, point]));
 
-  const closePath = buildLinePath(
-    window.map((candle) => candle.close),
-    620,
-    240,
+  const priceBounds = computePriceBounds(
+    window,
+    window.map((candle) => pointMap.get(candle.date)?.sma200 ?? null),
   );
+  if (!priceBounds) return null;
+
+  const candlesticks = buildCandlestickGlyphs(window, 620, 240, priceBounds);
+  const candleBodyWidth = resolveCandlestickBodyWidth(window.length, 620);
+
   const smaPath = buildPathFromNullable(
     window.map((candle) => pointMap.get(candle.date)?.sma200 ?? null),
     620,
     240,
+    priceBounds,
   );
   const rsiPath = buildPathFromNullable(
     window.map((candle) => pointMap.get(candle.date)?.rsi ?? null),
@@ -132,7 +141,8 @@ async function loadEventDetail(
 
   return {
     event: targetEvent,
-    closePath,
+    candlesticks,
+    candleBodyWidth,
     smaPath,
     rsiPath,
     atrPath,
@@ -221,9 +231,29 @@ export default async function EventDetailPage({ params, searchParams }: EventDet
         <div className="glass-card p-4 md:p-5">
           <h2 className="font-display text-lg font-semibold">イベント前後チャート</h2>
           <div className="mt-4 rounded-xl border border-line bg-gradient-to-br from-panel via-[#fbf6ea] to-panel p-3">
-            <p className="mb-1 text-xs text-muted">Close(青) / SMA200(橙)</p>
+            <p className="mb-1 text-xs text-muted">ローソク足 (上昇=青, 下落=朱) / SMA200(橙)</p>
             <svg viewBox="0 0 620 240" className="h-52 w-full">
-              <path d={detail.closePath} fill="none" stroke="#005f73" strokeWidth="3.5" />
+              {detail.candlesticks.map((candle) => (
+                <g key={candle.date}>
+                  <line
+                    x1={candle.x}
+                    x2={candle.x}
+                    y1={candle.wickTopY}
+                    y2={candle.wickBottomY}
+                    stroke={candle.isUp ? "#0a9396" : "#bb3e03"}
+                    strokeWidth="1.2"
+                  />
+                  <rect
+                    x={candle.x - detail.candleBodyWidth / 2}
+                    y={candle.bodyTopY}
+                    width={detail.candleBodyWidth}
+                    height={candle.bodyHeight}
+                    fill={candle.isUp ? "#0a9396" : "#bb3e03"}
+                    opacity="0.88"
+                    rx="1"
+                  />
+                </g>
+              ))}
               <path d={detail.smaPath} fill="none" stroke="#ee9b00" strokeWidth="2.5" />
               <line
                 x1={detail.markerX}
