@@ -14,7 +14,7 @@ export type UiSettings = {
 };
 
 export const defaultUiSettings: UiSettings = {
-  defaultRange: "10y",
+  defaultRange: "5y",
   preDays: 10,
   postDays: 50,
   defaultMode: "score",

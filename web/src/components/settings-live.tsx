@@ -194,9 +194,9 @@ export function SettingsLive() {
               value={settings.defaultRange}
               onChange={(e) => setSettings((prev) => ({ ...prev, defaultRange: e.target.value }))}
             >
-              <option value="10y">10年（デフォルト）</option>
+              <option value="5y">5年（デフォルト）</option>
+              <option value="10y">10年</option>
               <option value="max">全期間</option>
-              <option value="5y">5年</option>
             </select>
           </label>
           <label className="space-y-1">

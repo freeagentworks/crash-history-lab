@@ -21,9 +21,9 @@ type CrashEventsResponse = {
 };
 
 const rangeOptions = [
-  { label: "10年（デフォルト）", value: "10y" },
+  { label: "5年（デフォルト）", value: "5y" },
+  { label: "10年", value: "10y" },
   { label: "全期間", value: "max" },
-  { label: "5年", value: "5y" },
   { label: "2年", value: "2y" },
 ];
 

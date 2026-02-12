@@ -13,7 +13,7 @@ export type EventDetailContext = {
 };
 
 const defaultContext: EventDetailContext = {
-  range: "10y",
+  range: "5y",
   mode: "score",
   threshold: 70,
   coolingDays: 10,

@@ -56,7 +56,7 @@ export async function POST(request: Request) {
   try {
     let candles = body.candles;
     if (!candles || candles.length === 0) {
-      const market = await fetchYahooCandles({ symbol, range: body.range ?? "10y" });
+      const market = await fetchYahooCandles({ symbol, range: body.range ?? "5y" });
       candles = market.candles;
     }
 
