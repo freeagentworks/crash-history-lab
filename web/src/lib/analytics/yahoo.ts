@@ -1,4 +1,5 @@
 import type { Candle } from "./types";
+import { buildYahooSymbolCandidates } from "./symbol";
 
 type YahooChartResult = {
   timestamp?: number[];
@@ -67,6 +68,51 @@ async function fetchWithBackoff(
 }
 
 export async function fetchYahooCandles(input: {
+  symbol: string;
+  range?: string;
+  from?: string;
+  to?: string;
+}): Promise<{
+  candles: Candle[];
+  meta: Record<string, string | undefined>;
+}> {
+  const candidates = buildYahooSymbolCandidates(input.symbol);
+  if (candidates.length === 0) {
+    throw new Error("Yahoo symbol is required.");
+  }
+
+  let lastError: Error | null = null;
+
+  for (let i = 0; i < candidates.length; i += 1) {
+    const candidate = candidates[i];
+
+    try {
+      return await fetchYahooCandlesBySymbol({ ...input, symbol: candidate });
+    } catch (error) {
+      const resolvedError =
+        error instanceof Error ? error : new Error("Unknown Yahoo fetch error");
+      lastError = resolvedError;
+
+      const isLastCandidate = i === candidates.length - 1;
+      if (isLastCandidate || !isSymbolLookupError(resolvedError)) {
+        throw resolvedError;
+      }
+    }
+  }
+
+  throw lastError ?? new Error("Yahoo symbol resolution failed.");
+}
+
+function isSymbolLookupError(error: Error): boolean {
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("yahoo api error:") ||
+    message.includes("yahoo api returned no chart result") ||
+    message.includes("yahoo api request failed: 404")
+  );
+}
+
+async function fetchYahooCandlesBySymbol(input: {
   symbol: string;
   range?: string;
   from?: string;
